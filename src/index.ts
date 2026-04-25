@@ -5,6 +5,7 @@ import helmet from 'helmet';
 
 import saveRouter from './routes/save.js';
 import adminRouter from './routes/admin.js';
+import actionRouter from './routes/action.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -35,6 +36,7 @@ app.get('/health', (_req, res) => {
 // ── 路由挂载 ────────────────────────────────────────────────────────────────
 app.use('/api/save', saveRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/action', actionRouter);
 
 // ── 404 处理 ────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
