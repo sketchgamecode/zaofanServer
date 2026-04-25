@@ -1,0 +1,28 @@
+{
+  "name": "zaofan-server",
+  "version": "1.0.0",
+  "description": "大宋造反模拟器 — 游戏服务端 (权威经济 + 云存档 + 管理后台)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.50.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.4",
+    "typescript": "~5.7.0"
+  }
+}
