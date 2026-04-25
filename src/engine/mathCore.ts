@@ -90,3 +90,57 @@ export function getTotalAttributes(state: GameState): PlayerAttributes {
 export function getTodayCN(): string {
   return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 }
+
+/** 服务端简化战斗模拟 — 不依赖客户端上报，返回胜负结果 */
+export interface BattleSide {
+  hp: number;
+  atk: number;    // 每轮平均伤害
+  critChance: number;
+  armor: number;
+  level: number;
+}
+
+export function serverSimulateBattle(player: BattleSide, enemy: BattleSide): boolean {
+  let pHP = player.hp;
+  let eHP = enemy.hp;
+  const MAX_ROUNDS = 200;
+
+  for (let i = 0; i < MAX_ROUNDS; i++) {
+    // 玩家攻击敌人
+    const pIsCrit = Math.random() < player.critChance;
+    const pDmg = Math.max(1, Math.floor(player.atk * (pIsCrit ? 2 : 1) - enemy.armor * 0.3));
+    eHP -= pDmg;
+    if (eHP <= 0) return true;
+
+    // 敌人攻击玩家
+    const eDmg = Math.max(1, Math.floor(enemy.atk - player.armor * 0.3));
+    pHP -= eDmg;
+    if (pHP <= 0) return false;
+  }
+
+  // 超出轮数：血量多者胜
+  return pHP > eHP;
+}
+
+/** 从 GameState 构建玩家战斗数据 */
+export function buildPlayerBattleSide(state: GameState): BattleSide {
+  const attrs = getTotalAttributes(state);
+  const classConf = CLASS_CONFIG[state.classId];
+  const mainAttr = attrs[classConf.mainStat];
+  const mainHand = state.equipped.mainHand;
+  const weaponAvg = mainHand?.weaponDamage
+    ? (mainHand.weaponDamage.min + mainHand.weaponDamage.max) / 2
+    : state.playerLevel * 3;
+
+  const totalArmor = Object.values(state.equipped).reduce(
+    (sum, e) => sum + (e?.armor ?? 0), 0
+  );
+
+  return {
+    hp:         MathCore.getMaxHP(attrs.constitution, state.playerLevel, state.classId),
+    atk:        Math.floor(weaponAvg * (1 + mainAttr / 10)),
+    critChance: MathCore.getCritChance(attrs.luck, state.playerLevel),
+    armor:      Math.min(totalArmor, classConf.armorCap * state.playerLevel),
+    level:      state.playerLevel,
+  };
+}
