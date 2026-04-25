@@ -64,6 +64,7 @@ export interface GameState {
   equipped: Record<EquipmentSlot, Equipment | null>;
   inventory: Equipment[];
   activeMission: ActiveMission | null;
+  availableMissions: ActiveMission[];
   blackMarket: { items: (Equipment | null)[]; lastRefresh: number };
   dungeonProgress: Record<string, number>;
   dungeonDailyAttempt: { date: string; used: number };
@@ -90,6 +91,7 @@ export function getInitialGameState(): GameState {
     },
     inventory: [],
     activeMission: null,
+    availableMissions: [],
     blackMarket: { items: Array(6).fill(null), lastRefresh: 0 },
     dungeonProgress: { chapter_1: 0 },
     dungeonDailyAttempt: { date: '', used: 0 },
@@ -115,4 +117,5 @@ export interface ActionResult {
   gameState: GameState;
   log: { type: 'info' | 'reward' | 'combat' | 'error' | 'system'; text: string }[];
   error?: string;
+  data?: any; // 可选的附加数据，如具体奖励数值
 }

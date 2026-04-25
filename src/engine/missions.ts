@@ -7,8 +7,9 @@
  * - 每次任务消耗食物（rations），食物不足则无法出发
  * - 任务有唯一的 endTime 时间戳，服务端负责判断是否到期
  */
-import type { GameState, MissionType, ActionResult } from '../types/gameState.js';
+import type { GameState, MissionType, ActionResult, ActiveMission } from '../types/gameState.js';
 import { checkLevelUp } from './mathCore.js';
+import { generateEquipment } from './equipmentGenerator.js';
 
 interface MissionTemplate {
   nameZh: string;
@@ -31,57 +32,51 @@ const MISSION_TEMPLATES: Record<MissionType, MissionTemplate> = {
 /** START_MISSION：开始一个新任务 */
 export function startMission(state: GameState, payload: Record<string, unknown>): ActionResult {
   const log: ActionResult['log'] = [];
-  const missionType = payload.missionType as MissionType;
+  const missionId = payload.missionId as string;
 
-  if (!['A', 'B', 'C'].includes(missionType)) {
-    return { success: false, gameState: state, log, error: '无效的任务类型，必须为 A/B/C' };
+  if (!missionId) {
+    return { success: false, gameState: state, log, error: '缺少任务 ID' };
   }
 
   if (state.activeMission) {
     return { success: false, gameState: state, log, error: '已有进行中的任务，请先完成当前任务' };
   }
 
-  const tmpl = MISSION_TEMPLATES[missionType];
-
-  if (state.resources.rations < tmpl.foodCost) {
-    return { success: false, gameState: state, log,
-      error: `干粮不足！需要 ${tmpl.foodCost} 份，当前仅有 ${state.resources.rations} 份` };
+  const mission = state.availableMissions.find(m => m.id === missionId);
+  if (!mission) {
+    return { success: false, gameState: state, log, error: '任务不存在或已过期' };
   }
 
-  const expReward  = tmpl.baseXP   * state.playerLevel;
-  const coinReward = tmpl.baseCoin * state.playerLevel;
-  const endTime    = Date.now() + tmpl.durationSec * 1000;
+  if (state.resources.rations < mission.foodCost) {
+    return { success: false, gameState: state, log,
+      error: `干粮不足！需要 ${mission.foodCost} 份，当前仅有 ${state.resources.rations} 份` };
+  }
+
+  const endTime = Date.now() + mission.durationSec * 1000;
+  const activeMission: ActiveMission = { ...mission, endTime };
 
   const newState: GameState = {
     ...state,
-    resources: { ...state.resources, rations: state.resources.rations - tmpl.foodCost },
-    activeMission: {
-      id: `mission_${Date.now()}`,
-      type: missionType,
-      name: tmpl.nameZh,
-      durationSec: tmpl.durationSec,
-      foodCost: tmpl.foodCost,
-      expReward,
-      coinReward,
-      dropRate: tmpl.dropRate,
-      endTime,
-    },
+    resources: { ...state.resources, rations: state.resources.rations - mission.foodCost },
+    activeMission,
+    availableMissions: [], // 清空可选任务列表，下次需要重新生成
     lastUpdated: Date.now(),
   };
 
-  const durationStr = tmpl.durationSec >= 3600
-    ? `${Math.floor(tmpl.durationSec / 3600)}小时`
-    : `${tmpl.durationSec / 60}分钟`;
+  const durationStr = mission.durationSec >= 3600
+    ? `${Math.floor(mission.durationSec / 3600)}小时`
+    : `${Math.floor(mission.durationSec / 60)}分钟`;
 
-  log.push({ type: 'info', text: `出发执行${tmpl.nameZh}，预计 ${durationStr} 后返回` });
-  log.push({ type: 'reward', text: `预计奖励：${coinReward} 铜钱，${expReward} 经验` });
+  log.push({ type: 'info', text: `出发执行${mission.name}，预计 ${durationStr} 后返回` });
+  log.push({ type: 'reward', text: `预计奖励：${mission.coinReward} 铜钱，${mission.expReward} 经验` });
 
   return { success: true, gameState: newState, log };
 }
 
 /** COMPLETE_MISSION：服务端结算任务（验证时间戳后发放奖励） */
-export function completeMission(state: GameState, _payload: Record<string, unknown>): ActionResult {
+export function completeMission(state: GameState, payload: Record<string, unknown>): ActionResult {
   const log: ActionResult['log'] = [];
+  const forceDrop = payload.forceDrop === true;
 
   if (!state.activeMission) {
     return { success: false, gameState: state, log, error: '没有进行中的任务' };
@@ -99,16 +94,29 @@ export function completeMission(state: GameState, _payload: Record<string, unkno
     state.exp + mission.expReward
   );
 
+  let droppedItem = null;
+  droppedItem = generateEquipment(state.playerLevel, mission.type, forceDrop);
+
+  const newInventory = [...state.inventory];
+  if (droppedItem) {
+    newInventory.push(droppedItem);
+  }
+
   const newState: GameState = {
     ...state,
     exp: newExp,
     playerLevel: newLevel,
     resources: { ...state.resources, copper: state.resources.copper + mission.coinReward },
     activeMission: null,
+    inventory: newInventory,
     lastUpdated: Date.now(),
   };
 
   log.push({ type: 'reward', text: `任务完成！获得 ${mission.coinReward} 铜钱，${mission.expReward} 经验` });
+  if (droppedItem) {
+    log.push({ type: 'reward', text: `意外发现了一件装备：【${droppedItem.name}】！` });
+  }
+  
   if (levelsGained > 0) {
     log.push({ type: 'system', text: `🎉 升级！你现在是 ${newLevel} 级了` });
     if (levelsGained > 1) {
@@ -116,7 +124,19 @@ export function completeMission(state: GameState, _payload: Record<string, unkno
     }
   }
 
-  return { success: true, gameState: newState, log };
+  return { 
+    success: true, 
+    gameState: newState, 
+    log,
+    data: {
+      missionName: mission.name,
+      coinReward: mission.coinReward,
+      expReward: mission.expReward,
+      droppedItemName: droppedItem?.name ?? null,
+      didLevelUp: levelsGained > 0,
+      newLevel: newLevel
+    }
+  };
 }
 
 /** SKIP_MISSION：花费代币（token）立即完成任务 */

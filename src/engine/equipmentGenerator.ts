@@ -1,4 +1,4 @@
-import type { Equipment, EquipmentSlot, ItemQuality } from './gameState';
+import type { Equipment, EquipmentSlot, ItemQuality } from '../types/gameState.js';
 
 const SLOTS: EquipmentSlot[] = ['head', 'chest', 'hands', 'feet', 'neck', 'belt', 'ring', 'trinket', 'mainHand', 'offHand'];
 
