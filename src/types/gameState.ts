@@ -1,121 +1,312 @@
-/**
- * GameState 类型定义 — 服务端权威版本
- * 这是整个游戏的数据契约，所有客户端必须遵守此接口。
- */
+export type PlayerClassId = 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D';
 
-export type EquipmentSlot = 'head' | 'chest' | 'hands' | 'feet' | 'neck' | 'belt' | 'ring' | 'trinket' | 'mainHand' | 'offHand';
-export type ItemQuality = 'white' | 'green' | 'blue';
-export type MissionType = 'A' | 'B' | 'C';
-export type ClassId = 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D';
+export type EquipmentSlot =
+  | 'head'
+  | 'body'
+  | 'hands'
+  | 'feet'
+  | 'neck'
+  | 'belt'
+  | 'ring'
+  | 'trinket'
+  | 'weapon'
+  | 'offHand';
 
-export interface ActiveMission {
-  id: string;
-  type: MissionType;
-  name: string;
-  durationSec: number;
-  foodCost: number;
-  expReward: number;
-  coinReward: number;
-  dropRate: number;
-  endTime: number;
-}
+export type ItemRarity = 0 | 1 | 2 | 3 | 4;
 
-export interface Equipment {
-  id: string;
-  name: string;
-  description: string;
-  slot: EquipmentSlot;
-  quality: ItemQuality;
-  subType?: 'weapon' | 'shield' | 'none';
-  armor?: number;
-  weaponDamage?: { min: number; max: number };
-  price?: number;
-  bonusAttributes: {
-    strength?: number;
-    intelligence?: number;
-    agility?: number;
-    constitution?: number;
-    luck?: number;
-  };
-}
-
-export interface PlayerAttributes {
+export type AttributeState = {
   strength: number;
   intelligence: number;
   agility: number;
   constitution: number;
   luck: number;
-}
+  unspentPoints?: number;
+};
 
-export interface PlayerResources {
+export type EquipmentItem = {
+  id: string;
+  name: string;
+  description: string;
+  slot: EquipmentSlot;
+  rarity: ItemRarity;
+  subType?: 'weapon' | 'shield' | 'none';
+  armor?: number;
+  weaponDamage?: { min: number; max: number };
+  price?: number;
+  bonusAttributes: Partial<AttributeState>;
+};
+
+export type MetaState = {
+  schemaVersion: number;
+  createdAt: number;
+  updatedAt: number;
+  lastDailyResetDate: string;
+  stateRevision: number;
+};
+
+export type PlayerState = {
+  id?: string;
+  level: number;
+  exp: number;
+  classId: PlayerClassId;
+  displayName?: string;
+};
+
+export type ResourceState = {
   copper: number;
-  prestige: number;
-  rations: number;
   tokens: number;
   hourglasses: number;
-}
+  prestige: number;
+};
 
-export interface GameState {
-  playerLevel: number;
-  classId: ClassId;
-  exp: number;
-  attributes: PlayerAttributes;
-  resources: PlayerResources;
-  equipped: Record<EquipmentSlot, Equipment | null>;
-  inventory: Equipment[];
-  activeMission: ActiveMission | null;
-  availableMissions: ActiveMission[];
-  blackMarket: { items: (Equipment | null)[]; lastRefresh: number };
-  dungeonProgress: Record<string, number>;
-  dungeonDailyAttempt: { date: string; used: number };
-  lastRationsRefill: number;
-  arenaWins: number;
-  arenaDailyXP: { date: string; wins: number };
-  arenaCooldownEndTime: number;
-  tavernDailyDrinks: { date: string; count: number };
-  activeGuardWork: { endTime: number; coinReward: number } | null;
-  lastUpdated: number;
-}
+export type InventoryState = {
+  items: EquipmentItem[];
+  capacity?: number;
+};
 
-export function getInitialGameState(): GameState {
-  return {
-    playerLevel: 1,
-    classId: 'CLASS_A',
-    exp: 0,
-    attributes: { strength: 10, intelligence: 10, agility: 10, constitution: 10, luck: 10 },
-    resources: { copper: 0, prestige: 0, rations: 100, tokens: 50, hourglasses: 50 },
-    equipped: {
-      head: null, chest: null, hands: null, feet: null,
-      neck: null, belt: null, ring: null, trinket: null,
-      mainHand: null, offHand: null,
-    },
-    inventory: [],
-    activeMission: null,
-    availableMissions: [],
-    blackMarket: { items: Array(6).fill(null), lastRefresh: 0 },
-    dungeonProgress: { chapter_1: 0 },
-    dungeonDailyAttempt: { date: '', used: 0 },
-    lastRationsRefill: Date.now(),
-    arenaWins: 0,
-    arenaDailyXP: { date: '', wins: 0 },
-    arenaCooldownEndTime: 0,
-    tavernDailyDrinks: { date: '', count: 0 },
-    activeGuardWork: null,
-    lastUpdated: Date.now(),
+export type EquipmentState = {
+  equipped: Record<EquipmentSlot, EquipmentItem | null>;
+};
+
+export type VisibleReward = {
+  xp: number;
+  copper: number;
+  hasEquipment: boolean;
+  equipmentPreview?: {
+    slot: EquipmentSlot;
+    rarity: ItemRarity;
+    name?: string;
   };
+  hasDungeonKey: boolean;
+  dungeonKeyPreview?: {
+    dungeonId: string;
+    name: string;
+  };
+  hasHourglass?: boolean;
+};
+
+export type EnemyPreview = {
+  enemyId: string;
+  name: string;
+  level: number;
+  archetype?: string;
+};
+
+export type MountSnapshot = {
+  timeMultiplierBp: number;
+  name?: string;
+  tier?: string;
+  capturedAt: number;
+};
+
+export type PlayerCombatSnapshot = {
+  level: number;
+  classId?: PlayerClassId;
+  attributes: Omit<AttributeState, 'unspentPoints'>;
+  combatStats: {
+    hp: number;
+    armor: number;
+    damageMin: number;
+    damageMax: number;
+    critChanceBp: number;
+    dodgeChanceBp?: number;
+    blockChanceBp?: number;
+  };
+  equipmentSummary: {
+    weaponId?: string;
+    offHandId?: string;
+    itemPowerTotal: number;
+  };
+};
+
+export type EnemySnapshot = {
+  enemyId: string;
+  name: string;
+  level: number;
+  attributes: Omit<AttributeState, 'unspentPoints'>;
+  combatStats: {
+    hp: number;
+    armor: number;
+    damageMin: number;
+    damageMax: number;
+    critChanceBp: number;
+    dodgeChanceBp?: number;
+  };
+  enemyPowerRatioBp: number;
+};
+
+export type DungeonKey = {
+  dungeonId: string;
+  name: string;
+};
+
+export type RewardSnapshot = {
+  xp: number;
+  copper: number;
+  tokens: number;
+  equipment: EquipmentItem | null;
+  dungeonKey: DungeonKey | null;
+  hourglass: number;
+  firstMissionBonusApplied: boolean;
+  hiddenRolls: {
+    rewardSeed: string;
+    equipmentRollSeed?: string;
+    dungeonKeyRollSeed?: string;
+  };
+};
+
+export type GrantedReward = {
+  xp: number;
+  copper: number;
+  tokens: number;
+  hourglass: number;
+  equipment?: EquipmentItem;
+  dungeonKey?: DungeonKey;
+};
+
+export type BattleRound = {
+  attacker: 'player' | 'enemy';
+  damage: number;
+  targetHpAfter: number;
+  wasCrit?: boolean;
+};
+
+export type BattleResult = {
+  playerWon: boolean;
+  rounds: BattleRound[];
+  playerHpEnd: number;
+  enemyHpEnd: number;
+  totalRounds: number;
+};
+
+export type PlayerDelta = {
+  levelBefore: number;
+  levelAfter: number;
+  xpBefore: number;
+  xpAfter: number;
+  copperBefore: number;
+  copperAfter: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  hourglassesBefore: number;
+  hourglassesAfter: number;
+  prestigeBefore: number;
+  prestigeAfter: number;
+};
+
+export type MissionOffer = {
+  offerSetId: string;
+  missionId: string;
+  offerSeq: number;
+  slotIndex: 0 | 1 | 2;
+  title: string;
+  description: string;
+  locationName?: string;
+  baseDurationSec: number;
+  actualDurationSec: number;
+  thirstCostSec: number;
+  visibleReward: VisibleReward;
+  enemyPreview: EnemyPreview;
+  generatedAt: number;
+};
+
+export type ActiveMission = {
+  missionId: string;
+  offerSetId: string;
+  offerSeq: number;
+  slotIndex: 0 | 1 | 2;
+  title: string;
+  description: string;
+  locationName?: string;
+  startedAt: number;
+  endTime: number;
+  baseDurationSec: number;
+  actualDurationSec: number;
+  thirstCostSec: number;
+  mountSnapshot: MountSnapshot;
+  playerCombatSnapshot: PlayerCombatSnapshot;
+  enemySnapshot: EnemySnapshot;
+  rewardSnapshot: RewardSnapshot;
+  combatSeed: string;
+  rewardSeed: string;
+  settlementStatus: 'UNSETTLED' | 'SETTLED';
+  rewardGranted: boolean;
+};
+
+export type MissionSettlement = {
+  missionId: string;
+  offerSetId: string;
+  settledAt: number;
+  result: 'SUCCESS' | 'FAILED';
+  rewardGranted: boolean;
+  rewardSnapshot: RewardSnapshot;
+  grantedReward: GrantedReward;
+  battleResult: BattleResult;
+  playerDelta: PlayerDelta;
+};
+
+export type TavernState = {
+  thirstSecRemaining: number;
+  drinksUsedToday: number;
+  firstMissionBonusClaimed: boolean;
+  dailyQuestCounter: number;
+  offerSeq: number;
+  missionOffers: MissionOffer[];
+  activeMission: ActiveMission | null;
+  lastSettlement: MissionSettlement | null;
+};
+
+export type MountState = {
+  timeMultiplierBp: 10000 | 9000 | 8000 | 7000 | 5000;
+  expiresAt: number | null;
+  name?: string;
+  tier?: string;
+};
+
+export type BlackMarketState = {
+  status: 'UNINITIALIZED' | 'DISABLED' | 'ACTIVE';
+  items: EquipmentItem[];
+  lastRefreshAt: number | null;
+};
+
+export type ArenaState = {
+  status: 'UNINITIALIZED' | 'DISABLED' | 'ACTIVE';
+  dailyWins: number;
+  lastDailyResetDate: string;
+  cooldownEndTime: number | null;
+};
+
+export type DungeonState = {
+  status: 'UNINITIALIZED' | 'DISABLED' | 'ACTIVE';
+  progress: Record<string, number>;
+  keys: DungeonKey[];
+  dailyAttemptsUsed: number;
+  lastDailyResetDate: string;
+};
+
+export type GameState = {
+  meta: MetaState;
+  player: PlayerState;
+  resources: ResourceState;
+  attributes: AttributeState;
+  inventory: InventoryState;
+  equipment: EquipmentState;
+  tavern: TavernState;
+  mount: MountState;
+  blackMarket: BlackMarketState;
+  arena: ArenaState;
+  dungeon: DungeonState;
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
-/** 客户端发送的 Action 结构 */
-export interface GameAction {
-  action: string;
-  payload?: Record<string, unknown>;
-}
-
-/** 服务端统一响应结构 */
-export interface ActionResult {
-  success: boolean;
-  gameState: GameState;
-  log: { type: 'info' | 'reward' | 'combat' | 'error' | 'system'; text: string }[];
-  error?: string;
-  data?: any; // 可选的附加数据，如具体奖励数值
+export function isGameState(value: unknown): value is GameState {
+  if (!isObject(value)) return false;
+  if (!isObject(value.meta) || !isObject(value.player) || !isObject(value.resources)) return false;
+  if (!isObject(value.attributes) || !isObject(value.inventory) || !isObject(value.equipment)) return false;
+  if (!isObject(value.tavern) || !isObject(value.mount) || !isObject(value.blackMarket)) return false;
+  if (!isObject(value.arena) || !isObject(value.dungeon)) return false;
+  return typeof value.meta.schemaVersion === 'number';
 }

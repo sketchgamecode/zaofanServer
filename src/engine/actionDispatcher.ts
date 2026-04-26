@@ -1,0 +1,62 @@
+import type { ActionResponse, GameActionEnvelope } from '../types/action.js';
+import type { ActionContext } from './actionContext.js';
+import { buildDisabledActionResponse } from './disabledActions.js';
+import { debugResetSave } from './debugActions.js';
+import { GameError, toActionErrorResponse } from './errors.js';
+import { completeMission, skipMission, startMission } from './missions.js';
+import { generateMissions, getTavernInfo, tavernDrink } from './tavern.js';
+
+type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
+
+const DISABLED_ACTIONS: Record<string, string> = {
+  UPGRADE_ATTRIBUTE: 'attributes',
+  EQUIP_ITEM: 'inventory',
+  UNEQUIP_ITEM: 'inventory',
+  BLACK_MARKET_REFRESH: 'blackMarket',
+  BLACK_MARKET_BUY: 'blackMarket',
+  ARENA_FIGHT: 'arena',
+  ARENA_SKIP_COOLDOWN: 'arena',
+  GUARD_WORK_START: 'guardWork',
+  GUARD_WORK_CLAIM: 'guardWork',
+  DUNGEON_FIGHT: 'dungeon',
+  DEBUG_CHEAT: 'debugCheat',
+};
+
+const ACTION_HANDLERS: Record<string, Handler> = {
+  DEBUG_RESET_SAVE: debugResetSave,
+  TAVERN_GET_INFO: getTavernInfo,
+  GENERATE_MISSIONS: generateMissions,
+  TAVERN_DRINK: tavernDrink,
+  START_MISSION: startMission,
+  COMPLETE_MISSION: completeMission,
+  SKIP_MISSION: skipMission,
+};
+
+export async function dispatchAction(
+  ctx: ActionContext,
+  actionEnvelope: GameActionEnvelope,
+): Promise<ActionResponse> {
+  const action = actionEnvelope.action;
+  const payload = actionEnvelope.payload ?? {};
+
+  try {
+    const handler = ACTION_HANDLERS[action];
+    if (handler) {
+      return await handler(ctx, payload);
+    }
+
+    const disabledFeature = DISABLED_ACTIONS[action];
+    if (disabledFeature) {
+      return buildDisabledActionResponse(action, disabledFeature, ctx.state, ctx.now);
+    }
+
+    throw new GameError('UNKNOWN_ACTION', `Unknown action: ${action}`);
+  } catch (error) {
+    return toActionErrorResponse({
+      action,
+      serverTime: ctx.now,
+      error,
+      stateRevision: ctx.state.meta.stateRevision,
+    });
+  }
+}

@@ -1,169 +1,430 @@
-/**
- * 任务引擎 — 严格还原 S&F 任务机制
- *
- * S&F 任务规则：
- * - 三种时长（短/中/长），分别对应不同的时间、食物消耗、XP/金币奖励
- * - 奖励按角色等级动态缩放
- * - 每次任务消耗食物（rations），食物不足则无法出发
- * - 任务有唯一的 endTime 时间戳，服务端负责判断是否到期
- */
-import type { GameState, MissionType, ActionResult, ActiveMission } from '../types/gameState.js';
-import { checkLevelUp } from './mathCore.js';
+import { CLASSIC_TAVERN_RULES } from '../config/classicTavernRules.js';
+import { createSeededRandom } from '../lib/rng.js';
+import type { ActionSuccessResponse } from '../types/action.js';
+import type {
+  ActiveMission,
+  EnemySnapshot,
+  GameState,
+  GrantedReward,
+  MissionSettlement,
+  PlayerCombatSnapshot,
+  RewardSnapshot,
+} from '../types/gameState.js';
+import type { ActionContext } from './actionContext.js';
 import { generateEquipment } from './equipmentGenerator.js';
+import { GameError } from './errors.js';
+import { buildPlayerBattleSide, getTotalAttributes, serverSimulateBattle } from './mathCore.js';
+import { buildPlayerDelta, captureResourceSnapshot, grantExp, grantResource, spendResource } from './resourceService.js';
+import { buildTavernSummaryView, generateMissionOffers, getCurrentMountMultiplierBp, getTavernInfo, getTavernStatus, type TavernInfoData } from './tavern.js';
 
-interface MissionTemplate {
-  nameZh: string;
-  durationSec: number;
-  foodCost: number;
-  /** XP 奖励 = baseXP * level */
-  baseXP: number;
-  /** 金币奖励 = baseCoin * level */
-  baseCoin: number;
-  dropRate: number;
-}
-
-/** S&F 原版三种任务配置（按等级缩放） */
-const MISSION_TEMPLATES: Record<MissionType, MissionTemplate> = {
-  A: { nameZh: '短期任务', durationSec: 15 * 60,  foodCost: 1,  baseXP: 4,  baseCoin: 3,  dropRate: 0.05 },
-  B: { nameZh: '中期任务', durationSec: 2 * 3600,  foodCost: 3,  baseXP: 32, baseCoin: 24, dropRate: 0.12 },
-  C: { nameZh: '长期任务', durationSec: 8 * 3600,  foodCost: 10, baseXP: 96, baseCoin: 72, dropRate: 0.20 },
+export type StartMissionPayload = {
+  missionId?: string;
+  offerSetId?: string;
 };
 
-/** START_MISSION：开始一个新任务 */
-export function startMission(state: GameState, payload: Record<string, unknown>): ActionResult {
-  const log: ActionResult['log'] = [];
-  const missionId = payload.missionId as string;
+export type CompleteMissionData = {
+  result: 'SUCCESS' | 'FAILED' | 'ALREADY_SETTLED';
+  missionId: string;
+  offerSetId: string;
+  battleResult: GameState['tavern']['lastSettlement'] extends infer _T
+    ? {
+        playerWon: boolean;
+        rounds: { attacker: 'player' | 'enemy'; damage: number; targetHpAfter: number; wasCrit?: boolean }[];
+        playerHpEnd: number;
+        enemyHpEnd: number;
+        totalRounds: number;
+      }
+    : never;
+  rewardGranted: boolean;
+  grantedReward: GrantedReward;
+  playerDelta: MissionSettlement['playerDelta'];
+  nextMissionOffers: GameState['tavern']['missionOffers'];
+  tavern: ReturnType<typeof buildTavernSummaryView>;
+};
 
+function emptyGrantedReward(): GrantedReward {
+  return {
+    xp: 0,
+    copper: 0,
+    tokens: 0,
+    hourglass: 0,
+  };
+}
+
+function buildPlayerCombatSnapshot(state: GameState): PlayerCombatSnapshot {
+  const attrs = getTotalAttributes(state);
+  const battleSide = buildPlayerBattleSide(state);
+  const weapon = state.equipment.equipped.weapon;
+  const offHand = state.equipment.equipped.offHand;
+  const itemPowerTotal = Object.values(state.equipment.equipped).reduce((sum, item) => {
+    if (!item) return sum;
+    const statPower = Object.values(item.bonusAttributes).reduce((acc, value) => acc + (value ?? 0), 0);
+    const weaponPower = item.weaponDamage ? item.weaponDamage.min + item.weaponDamage.max : 0;
+    return sum + (item.armor ?? 0) + statPower + weaponPower;
+  }, 0);
+
+  return {
+    level: state.player.level,
+    classId: state.player.classId,
+    attributes: {
+      strength: attrs.strength,
+      intelligence: attrs.intelligence,
+      agility: attrs.agility,
+      constitution: attrs.constitution,
+      luck: attrs.luck,
+    },
+    combatStats: {
+      hp: battleSide.hp,
+      armor: battleSide.armor,
+      damageMin: battleSide.damageMin,
+      damageMax: battleSide.damageMax,
+      critChanceBp: battleSide.critChanceBp,
+      dodgeChanceBp: battleSide.dodgeChanceBp,
+    },
+    equipmentSummary: {
+      weaponId: weapon?.id,
+      offHandId: offHand?.id,
+      itemPowerTotal,
+    },
+  };
+}
+
+function buildEnemySnapshot(player: PlayerCombatSnapshot, offer: GameState['tavern']['missionOffers'][number], seed: string): EnemySnapshot {
+  const rng = createSeededRandom(`${seed}:enemy`);
+  const hpRatioBp = rng.int(8600, 9400);
+  const damageRatioBp = rng.int(8400, 9300);
+  const armorRatioBp = rng.int(7000, 9000);
+  const critChanceBp = Math.max(300, Math.min(2200, player.combatStats.critChanceBp - rng.int(0, 250)));
+  const dodgeChanceBp = Math.max(0, Math.min(2000, (player.combatStats.dodgeChanceBp ?? 0) - rng.int(0, 200)));
+  const level = Math.max(1, offer.enemyPreview.level);
+
+  return {
+    enemyId: offer.enemyPreview.enemyId,
+    name: offer.enemyPreview.name,
+    level,
+    attributes: {
+      strength: Math.max(1, Math.floor(player.attributes.strength * hpRatioBp / 10000)),
+      intelligence: Math.max(1, Math.floor(player.attributes.intelligence * hpRatioBp / 10000)),
+      agility: Math.max(1, Math.floor(player.attributes.agility * damageRatioBp / 10000)),
+      constitution: Math.max(1, Math.floor(player.attributes.constitution * hpRatioBp / 10000)),
+      luck: Math.max(1, Math.floor(player.attributes.luck * 9000 / 10000)),
+    },
+    combatStats: {
+      hp: Math.max(8, Math.floor(player.combatStats.hp * hpRatioBp / 10000)),
+      armor: Math.max(0, Math.floor(player.combatStats.armor * armorRatioBp / 10000)),
+      damageMin: Math.max(1, Math.floor(player.combatStats.damageMin * damageRatioBp / 10000)),
+      damageMax: Math.max(2, Math.floor(player.combatStats.damageMax * damageRatioBp / 10000)),
+      critChanceBp,
+      dodgeChanceBp,
+    },
+    enemyPowerRatioBp: damageRatioBp,
+  };
+}
+
+function buildRewardSnapshot(
+  state: GameState,
+  offer: GameState['tavern']['missionOffers'][number],
+  rewardSeed: string,
+): RewardSnapshot {
+  const rng = createSeededRandom(`${rewardSeed}:reward`);
+  let tokens = 0;
+  let firstMissionBonusApplied = false;
+  const equipmentRollSeed = `${rewardSeed}:equipment`;
+  const equipment = offer.visibleReward.hasEquipment
+    ? generateEquipment({
+        playerLevel: state.player.level,
+        slot: offer.visibleReward.equipmentPreview?.slot,
+        rarity: offer.visibleReward.equipmentPreview?.rarity,
+        rng: createSeededRandom(equipmentRollSeed),
+      })
+    : null;
+
+  if (!state.tavern.firstMissionBonusClaimed) {
+    tokens += CLASSIC_TAVERN_RULES.firstMissionBonusTokens;
+    firstMissionBonusApplied = true;
+    state.tavern.firstMissionBonusClaimed = true;
+  }
+
+  return {
+    xp: offer.visibleReward.xp,
+    copper: offer.visibleReward.copper,
+    tokens,
+    equipment,
+    dungeonKey: null,
+    hourglass: 0,
+    firstMissionBonusApplied,
+    hiddenRolls: {
+      rewardSeed,
+      equipmentRollSeed: equipment ? equipmentRollSeed : undefined,
+      dungeonKeyRollSeed: undefined,
+    },
+  };
+}
+
+function findMissionOffer(state: GameState, payload: StartMissionPayload) {
+  const missionId = payload.missionId;
   if (!missionId) {
-    return { success: false, gameState: state, log, error: '缺少任务 ID' };
+    throw new GameError('MISSION_NOT_FOUND', 'Mission id is required.');
   }
 
-  if (state.activeMission) {
-    return { success: false, gameState: state, log, error: '已有进行中的任务，请先完成当前任务' };
+  const offer = state.tavern.missionOffers.find((entry) => entry.missionId === missionId);
+  if (!offer) {
+    throw new GameError('MISSION_NOT_FOUND', 'Mission not found.');
   }
 
-  const mission = state.availableMissions.find(m => m.id === missionId);
-  if (!mission) {
-    return { success: false, gameState: state, log, error: '任务不存在或已过期' };
+  if (payload.offerSetId !== undefined && payload.offerSetId !== offer.offerSetId) {
+    throw new GameError('OFFER_SET_MISMATCH', 'Offer set mismatch.');
   }
 
-  if (state.resources.rations < mission.foodCost) {
-    return { success: false, gameState: state, log,
-      error: `干粮不足！需要 ${mission.foodCost} 份，当前仅有 ${state.resources.rations} 份` };
-  }
-
-  const endTime = Date.now() + mission.durationSec * 1000;
-  const activeMission: ActiveMission = { ...mission, endTime };
-
-  const newState: GameState = {
-    ...state,
-    resources: { ...state.resources, rations: state.resources.rations - mission.foodCost },
-    activeMission,
-    availableMissions: [], // 清空可选任务列表，下次需要重新生成
-    lastUpdated: Date.now(),
-  };
-
-  const durationStr = mission.durationSec >= 3600
-    ? `${Math.floor(mission.durationSec / 3600)}小时`
-    : `${Math.floor(mission.durationSec / 60)}分钟`;
-
-  log.push({ type: 'info', text: `出发执行${mission.name}，预计 ${durationStr} 后返回` });
-  log.push({ type: 'reward', text: `预计奖励：${mission.coinReward} 铜钱，${mission.expReward} 经验` });
-
-  return { success: true, gameState: newState, log };
+  return offer;
 }
 
-/** COMPLETE_MISSION：服务端结算任务（验证时间戳后发放奖励） */
-export function completeMission(state: GameState, payload: Record<string, unknown>): ActionResult {
-  const log: ActionResult['log'] = [];
-  const forceDrop = payload.forceDrop === true;
-
-  if (!state.activeMission) {
-    return { success: false, gameState: state, log, error: '没有进行中的任务' };
-  }
-
-  if (Date.now() < state.activeMission.endTime) {
-    const remaining = Math.ceil((state.activeMission.endTime - Date.now()) / 1000);
-    return { success: false, gameState: state, log,
-      error: `任务尚未完成，还需等待 ${remaining} 秒` };
-  }
-
-  const mission = state.activeMission;
-  const { newLevel, newExp, levelsGained } = checkLevelUp(
-    state.playerLevel,
-    state.exp + mission.expReward
-  );
-
-  let droppedItem = null;
-  droppedItem = generateEquipment(state.playerLevel, mission.type, forceDrop);
-
-  const newInventory = [...state.inventory];
-  if (droppedItem) {
-    newInventory.push(droppedItem);
-  }
-
-  const newState: GameState = {
-    ...state,
-    exp: newExp,
-    playerLevel: newLevel,
-    resources: { ...state.resources, copper: state.resources.copper + mission.coinReward },
-    activeMission: null,
-    inventory: newInventory,
-    lastUpdated: Date.now(),
+function grantRewardSnapshot(state: GameState, rewardSnapshot: RewardSnapshot): GrantedReward {
+  const grantedReward: GrantedReward = {
+    xp: rewardSnapshot.xp,
+    copper: rewardSnapshot.copper,
+    tokens: rewardSnapshot.tokens,
+    hourglass: rewardSnapshot.hourglass,
   };
 
-  log.push({ type: 'reward', text: `任务完成！获得 ${mission.coinReward} 铜钱，${mission.expReward} 经验` });
-  if (droppedItem) {
-    log.push({ type: 'reward', text: `意外发现了一件装备：【${droppedItem.name}】！` });
+  if (rewardSnapshot.xp > 0) {
+    grantExp(state, rewardSnapshot.xp);
   }
-  
-  if (levelsGained > 0) {
-    log.push({ type: 'system', text: `🎉 升级！你现在是 ${newLevel} 级了` });
-    if (levelsGained > 1) {
-      log.push({ type: 'system', text: `连续升了 ${levelsGained} 级！` });
-    }
+  if (rewardSnapshot.copper > 0) {
+    grantResource(state, 'copper', rewardSnapshot.copper);
+  }
+  if (rewardSnapshot.tokens > 0) {
+    grantResource(state, 'tokens', rewardSnapshot.tokens);
+  }
+  if (rewardSnapshot.hourglass > 0) {
+    grantResource(state, 'hourglasses', rewardSnapshot.hourglass);
+  }
+  if (rewardSnapshot.equipment) {
+    state.inventory.items.push(rewardSnapshot.equipment);
+    grantedReward.equipment = rewardSnapshot.equipment;
+  }
+  if (rewardSnapshot.dungeonKey) {
+    state.dungeon.keys.push(rewardSnapshot.dungeonKey);
+    grantedReward.dungeonKey = rewardSnapshot.dungeonKey;
   }
 
-  return { 
-    success: true, 
-    gameState: newState, 
-    log,
-    data: {
-      missionName: mission.name,
-      coinReward: mission.coinReward,
-      expReward: mission.expReward,
-      droppedItemName: droppedItem?.name ?? null,
-      didLevelUp: levelsGained > 0,
-      newLevel: newLevel
-    }
+  return grantedReward;
+}
+
+function buildCompleteMissionData(
+  state: GameState,
+  settlement: MissionSettlement,
+  now: number,
+  resultOverride?: 'ALREADY_SETTLED',
+): CompleteMissionData {
+  return {
+    result: resultOverride ?? settlement.result,
+    missionId: settlement.missionId,
+    offerSetId: settlement.offerSetId,
+    battleResult: settlement.battleResult,
+    rewardGranted: settlement.rewardGranted,
+    grantedReward: settlement.grantedReward,
+    playerDelta: settlement.playerDelta,
+    nextMissionOffers: state.tavern.missionOffers,
+    tavern: buildTavernSummaryView(state, now),
   };
 }
 
-/** SKIP_MISSION：花费代币（token）立即完成任务 */
-export function skipMission(state: GameState, _payload: Record<string, unknown>): ActionResult {
-  const log: ActionResult['log'] = [];
-  const TOKEN_COST = 1;
+function buildAlreadySettledResponse(
+  state: GameState,
+  settlement: MissionSettlement,
+  now: number,
+  action: 'COMPLETE_MISSION' | 'SKIP_MISSION',
+): ActionSuccessResponse<CompleteMissionData> {
+  return {
+    ok: true,
+    action,
+    serverTime: now,
+    stateRevision: state.meta.stateRevision,
+    data: buildCompleteMissionData(state, settlement, now, 'ALREADY_SETTLED'),
+  };
+}
 
-  if (!state.activeMission) {
-    return { success: false, gameState: state, log, error: '没有进行中的任务' };
+function buildStartMissionResponse(state: GameState, now: number): ActionSuccessResponse<TavernInfoData> {
+  return {
+    ok: true,
+    action: 'START_MISSION',
+    serverTime: now,
+    stateRevision: state.meta.stateRevision,
+    data: getTavernInfo({ playerId: state.player.id ?? 'unknown', now, state, dirty: false, markDirty: () => {} }, {}).data,
+  };
+}
+
+function buildCompleteMissionResponse(
+  state: GameState,
+  settlement: MissionSettlement,
+  now: number,
+  action: 'COMPLETE_MISSION' | 'SKIP_MISSION',
+): ActionSuccessResponse<CompleteMissionData> {
+  return {
+    ok: true,
+    action,
+    serverTime: now,
+    stateRevision: state.meta.stateRevision,
+    data: buildCompleteMissionData(state, settlement, now),
+  };
+}
+
+export function startMission(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): ActionSuccessResponse<TavernInfoData> {
+  if (getTavernStatus(ctx.state, ctx.now) !== 'IDLE' || ctx.state.tavern.activeMission !== null) {
+    throw new GameError('MISSION_ALREADY_IN_PROGRESS', 'A mission is already in progress.');
   }
 
-  if (Date.now() >= state.activeMission.endTime) {
-    return completeMission(state, _payload);
+  const offer = findMissionOffer(ctx.state, payload as StartMissionPayload);
+  if (ctx.state.tavern.thirstSecRemaining < offer.thirstCostSec) {
+    throw new GameError('NOT_ENOUGH_THIRST', 'Not enough thirst to start mission.');
   }
 
-  if (state.resources.tokens < TOKEN_COST) {
-    return { success: false, gameState: state, log, error: `代币不足，需要 ${TOKEN_COST} 枚代币` };
-  }
+  const playerCombatSnapshot = buildPlayerCombatSnapshot(ctx.state);
+  const combatSeed = `combat_${ctx.playerId}_${offer.missionId}_${ctx.now}`;
+  const rewardSeed = `reward_${ctx.playerId}_${offer.missionId}_${ctx.now}`;
+  const enemySnapshot = buildEnemySnapshot(playerCombatSnapshot, offer, combatSeed);
+  const rewardSnapshot = buildRewardSnapshot(ctx.state, offer, rewardSeed);
+  const mountTimeMultiplierBp = getCurrentMountMultiplierBp(ctx.state.mount, ctx.now);
 
-  const tempState: GameState = {
-    ...state,
-    resources: { ...state.resources, tokens: state.resources.tokens - TOKEN_COST },
-    activeMission: { ...state.activeMission, endTime: Date.now() - 1 },
+  const activeMission: ActiveMission = {
+    missionId: offer.missionId,
+    offerSetId: offer.offerSetId,
+    offerSeq: offer.offerSeq,
+    slotIndex: offer.slotIndex,
+    title: offer.title,
+    description: offer.description,
+    locationName: offer.locationName,
+    startedAt: ctx.now,
+    endTime: ctx.now + offer.actualDurationSec * 1000,
+    baseDurationSec: offer.baseDurationSec,
+    actualDurationSec: offer.actualDurationSec,
+    thirstCostSec: offer.thirstCostSec,
+    mountSnapshot: {
+      timeMultiplierBp: mountTimeMultiplierBp,
+      name: ctx.state.mount.name,
+      tier: ctx.state.mount.tier,
+      capturedAt: ctx.now,
+    },
+    playerCombatSnapshot,
+    enemySnapshot,
+    rewardSnapshot,
+    combatSeed,
+    rewardSeed,
+    settlementStatus: 'UNSETTLED',
+    rewardGranted: false,
   };
 
-  log.push({ type: 'info', text: `花费 ${TOKEN_COST} 枚代币，立即完成任务` });
+  ctx.state.tavern.thirstSecRemaining -= offer.thirstCostSec;
+  ctx.state.tavern.dailyQuestCounter += 1;
+  ctx.state.tavern.activeMission = activeMission;
+  ctx.state.tavern.missionOffers = [];
+  ctx.markDirty();
 
-  const result = completeMission(tempState, _payload);
-  return { ...result, log: [...log, ...result.log] };
+  return buildStartMissionResponse(ctx.state, ctx.now);
+}
+
+export function completeMission(
+  ctx: ActionContext,
+  _payload: Record<string, unknown>,
+): ActionSuccessResponse<CompleteMissionData> {
+  const activeMission = ctx.state.tavern.activeMission;
+  if (!activeMission) {
+    if (ctx.state.tavern.lastSettlement) {
+      return buildAlreadySettledResponse(ctx.state, ctx.state.tavern.lastSettlement, ctx.now, 'COMPLETE_MISSION');
+    }
+    throw new GameError('NO_ACTIVE_MISSION', 'No active mission.');
+  }
+
+  if (ctx.now < activeMission.endTime) {
+    throw new GameError('MISSION_NOT_FINISHED', 'Mission has not finished yet.');
+  }
+
+  if (activeMission.settlementStatus === 'SETTLED' && ctx.state.tavern.lastSettlement) {
+    return buildAlreadySettledResponse(ctx.state, ctx.state.tavern.lastSettlement, ctx.now, 'COMPLETE_MISSION');
+  }
+
+  const before = captureResourceSnapshot(ctx.state);
+  const battleResult = serverSimulateBattle({
+    player: activeMission.playerCombatSnapshot,
+    enemy: activeMission.enemySnapshot,
+    seed: activeMission.combatSeed,
+  });
+
+  let grantedReward = emptyGrantedReward();
+  let rewardGranted = false;
+
+  if (battleResult.playerWon) {
+    grantedReward = grantRewardSnapshot(ctx.state, activeMission.rewardSnapshot);
+    rewardGranted = true;
+  }
+
+  const after = captureResourceSnapshot(ctx.state);
+  const settlement: MissionSettlement = {
+    missionId: activeMission.missionId,
+    offerSetId: activeMission.offerSetId,
+    settledAt: ctx.now,
+    result: battleResult.playerWon ? 'SUCCESS' : 'FAILED',
+    rewardGranted,
+    rewardSnapshot: activeMission.rewardSnapshot,
+    grantedReward,
+    battleResult,
+    playerDelta: buildPlayerDelta(before, after),
+  };
+
+  activeMission.settlementStatus = 'SETTLED';
+  activeMission.rewardGranted = rewardGranted;
+  ctx.state.tavern.lastSettlement = settlement;
+  ctx.state.tavern.activeMission = null;
+  ctx.state.tavern.missionOffers = [];
+  generateMissionOffers(ctx.state, ctx.now);
+  ctx.markDirty();
+
+  return buildCompleteMissionResponse(ctx.state, settlement, ctx.now, 'COMPLETE_MISSION');
+}
+
+function consumeSkipCost(state: GameState): void {
+  if (state.resources.hourglasses > 0) {
+    spendResource(state, 'hourglasses', 1);
+    return;
+  }
+
+  if (state.resources.tokens > 0) {
+    spendResource(state, 'tokens', 1);
+    return;
+  }
+
+  throw new GameError('NOT_ENOUGH_SKIP_RESOURCE', 'Not enough skip resources.');
+}
+
+export function skipMission(
+  ctx: ActionContext,
+  _payload: Record<string, unknown>,
+): ActionSuccessResponse<CompleteMissionData> {
+  const activeMission = ctx.state.tavern.activeMission;
+  if (!activeMission) {
+    if (ctx.state.tavern.lastSettlement) {
+      return buildAlreadySettledResponse(ctx.state, ctx.state.tavern.lastSettlement, ctx.now, 'SKIP_MISSION');
+    }
+    throw new GameError('NO_ACTIVE_MISSION', 'No active mission.');
+  }
+
+  if (activeMission.settlementStatus === 'SETTLED' && ctx.state.tavern.lastSettlement) {
+    return buildAlreadySettledResponse(ctx.state, ctx.state.tavern.lastSettlement, ctx.now, 'SKIP_MISSION');
+  }
+
+  if (ctx.now < activeMission.endTime) {
+    consumeSkipCost(ctx.state);
+    ctx.markDirty();
+  }
+
+  activeMission.endTime = ctx.now;
+  const result = completeMission(ctx, {});
+  return {
+    ...result,
+    action: 'SKIP_MISSION',
+  };
 }

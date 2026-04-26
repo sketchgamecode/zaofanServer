@@ -1,51 +1,41 @@
-/**
- * S&F 核心数学公式 — 服务端权威实现
- * 所有数值计算在此处发生，客户端只做展示。
- */
-import type { ClassId, GameState, PlayerAttributes } from '../types/gameState.js';
-import { XP_TABLE, MAX_LEVEL } from '../data/xpTable.js';
+import { MAX_LEVEL, XP_TABLE } from '../data/xpTable.js';
+import { createSeededRandom } from '../lib/rng.js';
+import { getGameDateString } from '../lib/time.js';
+import type {
+  AttributeState,
+  BattleResult,
+  EquipmentItem,
+  EnemySnapshot,
+  GameState,
+  PlayerClassId,
+  PlayerCombatSnapshot,
+} from '../types/gameState.js';
 
-export const CLASS_CONFIG: Record<ClassId, {
+export const CLASS_CONFIG: Record<PlayerClassId, {
   name: string;
   mainStat: 'strength' | 'agility' | 'intelligence';
   hpMultiplier: number;
   armorCap: number;
 }> = {
-  CLASS_A: { name: '猛将', mainStat: 'strength',      hpMultiplier: 5, armorCap: 50 },
-  CLASS_B: { name: '游侠', mainStat: 'agility',       hpMultiplier: 4, armorCap: 25 },
-  CLASS_C: { name: '谋士', mainStat: 'intelligence',  hpMultiplier: 2, armorCap: 10 },
-  CLASS_D: { name: '刺客', mainStat: 'agility',       hpMultiplier: 4, armorCap: 25 },
+  CLASS_A: { name: '猛将', mainStat: 'strength', hpMultiplier: 5, armorCap: 50 },
+  CLASS_B: { name: '游侠', mainStat: 'agility', hpMultiplier: 4, armorCap: 25 },
+  CLASS_C: { name: '谋士', mainStat: 'intelligence', hpMultiplier: 2, armorCap: 10 },
+  CLASS_D: { name: '刺客', mainStat: 'agility', hpMultiplier: 4, armorCap: 25 },
 };
 
 export const MathCore = {
-  getMaxHP: (constitution: number, level: number, classId: ClassId): number => {
-    return constitution * level * CLASS_CONFIG[classId].hpMultiplier;
-  },
+  getMaxHP: (constitution: number, level: number, classId: PlayerClassId): number =>
+    constitution * level * CLASS_CONFIG[classId].hpMultiplier,
 
-  getSingleHitDamage: (weaponDamage: number, mainAttribute: number, isAssassinDualWield: boolean): number => {
-    let dmg = weaponDamage * (1 + mainAttribute / 10);
-    if (isAssassinDualWield) dmg *= 0.625;
-    return Math.floor(dmg);
-  },
-
-  getCritChance: (luck: number, enemyLevel: number): number => {
-    const chance = (luck * 5) / (Math.max(1, enemyLevel) * 2);
-    return Math.min(0.5, chance / 100);
-  },
-
-  getArmorDamageReduction: (totalArmor: number, enemyLevel: number, rootCap: number): number => {
-    const reductionPercent = totalArmor / Math.max(1, enemyLevel);
-    return Math.min(rootCap / 100, reductionPercent);
-  },
-
-  getUpgradeCost: (currentValue: number): number => {
-    return Math.floor(10 * Math.pow(1.1, currentValue));
-  },
+  getCritChance: (luck: number, enemyLevel: number): number =>
+    Math.min(0.5, ((luck * 5) / (Math.max(1, enemyLevel) * 2)) / 100),
 };
 
-/** 结算升级，支持连续升级 */
 export function checkLevelUp(currentLevel: number, currentExp: number): {
-  newLevel: number; newExp: number; didLevelUp: boolean; levelsGained: number;
+  newLevel: number;
+  newExp: number;
+  didLevelUp: boolean;
+  levelsGained: number;
 } {
   let level = currentLevel;
   let exp = currentExp;
@@ -53,94 +43,167 @@ export function checkLevelUp(currentLevel: number, currentExp: number): {
 
   while (level < MAX_LEVEL) {
     const required = XP_TABLE[level];
-    if (required === undefined || exp < required) break;
+    if (required === undefined || exp < required) {
+      break;
+    }
+
     exp -= required;
-    level++;
-    levelsGained++;
+    level += 1;
+    levelsGained += 1;
   }
 
   return { newLevel: level, newExp: exp, didLevelUp: levelsGained > 0, levelsGained };
 }
 
-/** 计算装备加成后的总属性 */
-export function getTotalAttributes(state: GameState): PlayerAttributes {
-  const base = { ...state.attributes };
-  const bonus: PlayerAttributes = { strength: 0, intelligence: 0, agility: 0, constitution: 0, luck: 0 };
+export function getTotalAttributes(state: GameState): AttributeState {
+  const total: AttributeState = { ...state.attributes };
 
-  Object.values(state.equipped).forEach((equip) => {
-    if (!equip?.bonusAttributes) return;
-    const b = equip.bonusAttributes;
-    bonus.strength     += b.strength     ?? 0;
-    bonus.intelligence += b.intelligence ?? 0;
-    bonus.agility      += b.agility      ?? 0;
-    bonus.constitution += b.constitution ?? 0;
-    bonus.luck         += b.luck         ?? 0;
-  });
+  for (const item of Object.values(state.equipment.equipped)) {
+    if (!item) continue;
+    total.strength += item.bonusAttributes.strength ?? 0;
+    total.intelligence += item.bonusAttributes.intelligence ?? 0;
+    total.agility += item.bonusAttributes.agility ?? 0;
+    total.constitution += item.bonusAttributes.constitution ?? 0;
+    total.luck += item.bonusAttributes.luck ?? 0;
+  }
 
-  return {
-    strength:     base.strength     + bonus.strength,
-    intelligence: base.intelligence + bonus.intelligence,
-    agility:      base.agility      + bonus.agility,
-    constitution: base.constitution + bonus.constitution,
-    luck:         base.luck         + bonus.luck,
-  };
+  return total;
 }
 
-/** 获取今天的日期字符串 YYYY-MM-DD (UTC+8) */
 export function getTodayCN(): string {
-  return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  return getGameDateString(Date.now());
 }
 
-/** 服务端简化战斗模拟 — 不依赖客户端上报，返回胜负结果 */
 export interface BattleSide {
   hp: number;
-  atk: number;    // 每轮平均伤害
-  critChance: number;
+  damageMin: number;
+  damageMax: number;
+  critChanceBp: number;
+  dodgeChanceBp?: number;
   armor: number;
   level: number;
 }
 
-export function serverSimulateBattle(player: BattleSide, enemy: BattleSide): boolean {
-  let pHP = player.hp;
-  let eHP = enemy.hp;
-  const MAX_ROUNDS = 200;
-
-  for (let i = 0; i < MAX_ROUNDS; i++) {
-    // 玩家攻击敌人
-    const pIsCrit = Math.random() < player.critChance;
-    const pDmg = Math.max(1, Math.floor(player.atk * (pIsCrit ? 2 : 1) - enemy.armor * 0.3));
-    eHP -= pDmg;
-    if (eHP <= 0) return true;
-
-    // 敌人攻击玩家
-    const eDmg = Math.max(1, Math.floor(enemy.atk - player.armor * 0.3));
-    pHP -= eDmg;
-    if (pHP <= 0) return false;
-  }
-
-  // 超出轮数：血量多者胜
-  return pHP > eHP;
+function battleSideFromPlayer(snapshot: PlayerCombatSnapshot): BattleSide {
+  return {
+    hp: snapshot.combatStats.hp,
+    damageMin: snapshot.combatStats.damageMin,
+    damageMax: snapshot.combatStats.damageMax,
+    critChanceBp: snapshot.combatStats.critChanceBp,
+    dodgeChanceBp: snapshot.combatStats.dodgeChanceBp,
+    armor: snapshot.combatStats.armor,
+    level: snapshot.level,
+  };
 }
 
-/** 从 GameState 构建玩家战斗数据 */
-export function buildPlayerBattleSide(state: GameState): BattleSide {
-  const attrs = getTotalAttributes(state);
-  const classConf = CLASS_CONFIG[state.classId];
-  const mainAttr = attrs[classConf.mainStat];
-  const mainHand = state.equipped.mainHand;
-  const weaponAvg = mainHand?.weaponDamage
-    ? (mainHand.weaponDamage.min + mainHand.weaponDamage.max) / 2
-    : state.playerLevel * 3;
+function battleSideFromEnemy(snapshot: EnemySnapshot): BattleSide {
+  return {
+    hp: snapshot.combatStats.hp,
+    damageMin: snapshot.combatStats.damageMin,
+    damageMax: snapshot.combatStats.damageMax,
+    critChanceBp: snapshot.combatStats.critChanceBp,
+    dodgeChanceBp: snapshot.combatStats.dodgeChanceBp,
+    armor: snapshot.combatStats.armor,
+    level: snapshot.level,
+  };
+}
 
-  const totalArmor = Object.values(state.equipped).reduce(
-    (sum, e) => sum + (e?.armor ?? 0), 0
-  );
+function rollDamage(attacker: BattleSide, defender: BattleSide, rng: ReturnType<typeof createSeededRandom>): { damage: number; wasCrit: boolean; dodged: boolean } {
+  const dodged = defender.dodgeChanceBp !== undefined && rng.chanceBp(defender.dodgeChanceBp);
+  if (dodged) {
+    return { damage: 0, wasCrit: false, dodged: true };
+  }
+
+  const rawDamage = rng.int(attacker.damageMin, attacker.damageMax);
+  const wasCrit = rng.chanceBp(attacker.critChanceBp);
+  const critDamage = wasCrit ? Math.floor(rawDamage * 1.75) : rawDamage;
+  const mitigated = Math.max(1, Math.floor(critDamage - defender.armor * 0.25));
+  return { damage: mitigated, wasCrit, dodged: false };
+}
+
+export function serverSimulateBattle(input: {
+  player: PlayerCombatSnapshot;
+  enemy: EnemySnapshot;
+  seed: string;
+}): BattleResult {
+  const rng = createSeededRandom(input.seed);
+  const player = battleSideFromPlayer(input.player);
+  const enemy = battleSideFromEnemy(input.enemy);
+  let playerHp = player.hp;
+  let enemyHp = enemy.hp;
+  const rounds: BattleResult['rounds'] = [];
+
+  for (let roundIndex = 0; roundIndex < 200; roundIndex += 1) {
+    const playerRoll = rollDamage(player, enemy, rng);
+    enemyHp = Math.max(0, enemyHp - playerRoll.damage);
+    rounds.push({
+      attacker: 'player',
+      damage: playerRoll.damage,
+      targetHpAfter: enemyHp,
+      wasCrit: playerRoll.wasCrit || undefined,
+    });
+    if (enemyHp <= 0) {
+      return {
+        playerWon: true,
+        rounds,
+        playerHpEnd: playerHp,
+        enemyHpEnd: enemyHp,
+        totalRounds: rounds.length,
+      };
+    }
+
+    const enemyRoll = rollDamage(enemy, player, rng);
+    playerHp = Math.max(0, playerHp - enemyRoll.damage);
+    rounds.push({
+      attacker: 'enemy',
+      damage: enemyRoll.damage,
+      targetHpAfter: playerHp,
+      wasCrit: enemyRoll.wasCrit || undefined,
+    });
+    if (playerHp <= 0) {
+      return {
+        playerWon: false,
+        rounds,
+        playerHpEnd: playerHp,
+        enemyHpEnd: enemyHp,
+        totalRounds: rounds.length,
+      };
+    }
+  }
 
   return {
-    hp:         MathCore.getMaxHP(attrs.constitution, state.playerLevel, state.classId),
-    atk:        Math.floor(weaponAvg * (1 + mainAttr / 10)),
-    critChance: MathCore.getCritChance(attrs.luck, state.playerLevel),
-    armor:      Math.min(totalArmor, classConf.armorCap * state.playerLevel),
-    level:      state.playerLevel,
+    playerWon: playerHp >= enemyHp,
+    rounds,
+    playerHpEnd: playerHp,
+    enemyHpEnd: enemyHp,
+    totalRounds: rounds.length,
+  };
+}
+
+function getWeaponAverageDamage(item: EquipmentItem | null, level: number): number {
+  if (!item?.weaponDamage) {
+    return level * 3;
+  }
+
+  return (item.weaponDamage.min + item.weaponDamage.max) / 2;
+}
+
+export function buildPlayerBattleSide(state: GameState): BattleSide {
+  const attrs = getTotalAttributes(state);
+  const classConf = CLASS_CONFIG[state.player.classId];
+  const mainAttr = attrs[classConf.mainStat];
+  const totalArmor = Object.values(state.equipment.equipped).reduce((sum, item) => sum + (item?.armor ?? 0), 0);
+  const weaponAverageDamage = getWeaponAverageDamage(state.equipment.equipped.weapon, state.player.level);
+  const damageMin = Math.floor(weaponAverageDamage * 0.8 * (1 + mainAttr / 10));
+  const damageMax = Math.floor(weaponAverageDamage * 1.2 * (1 + mainAttr / 10));
+
+  return {
+    hp: MathCore.getMaxHP(attrs.constitution, state.player.level, state.player.classId),
+    damageMin,
+    damageMax,
+    critChanceBp: Math.floor(MathCore.getCritChance(attrs.luck, state.player.level) * 10000),
+    dodgeChanceBp: Math.min(2500, attrs.agility * 15),
+    armor: Math.min(totalArmor, classConf.armorCap * state.player.level),
+    level: state.player.level,
   };
 }

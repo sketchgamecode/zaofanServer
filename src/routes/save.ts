@@ -1,35 +1,34 @@
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { supabaseAdmin } from '../lib/supabase.js';
-import { z } from 'zod';
+import { applyDailyResetIfNeeded } from '../engine/dailyReset.js';
+import { loadOrCreateGameState, saveGameState } from '../lib/gameStateStore.js';
+import { getNow } from '../lib/time.js';
 
 const router = Router();
 
-/**
- * GET /api/save
- * 拉取当前登录玩家的云存档
- */
 router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> => {
-  const userId = (req as any).user.id;
+  const userId = (req as any).user.id as string;
+  const now = getNow();
 
-  const { data, error } = await supabaseAdmin
-    .from('player_saves')
-    .select('game_state, save_version, updated_at')
-    .eq('player_id', userId)
-    .single();
+  try {
+    const loadResult = await loadOrCreateGameState(userId, now);
+    const resetApplied = applyDailyResetIfNeeded(loadResult.state, now);
 
-  if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
-    res.status(500).json({ error: '读取存档失败', detail: error.message });
-    return;
+    if (loadResult.created || loadResult.resetInvalid || resetApplied) {
+      await saveGameState(userId, loadResult.state, now);
+    }
+
+    res.json({
+      save: loadResult.state,
+      saveVersion: loadResult.state.meta.schemaVersion,
+      updatedAt: new Date(loadResult.state.meta.updatedAt).toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: '读取存档失败',
+      detail: error instanceof Error ? error.message : 'Unknown server error',
+    });
   }
-
-  if (!data) {
-    // 新玩家，没有存档
-    res.json({ save: null, isNewPlayer: true });
-    return;
-  }
-
-  res.json({ save: data.game_state, saveVersion: data.save_version, updatedAt: data.updated_at });
 });
 
 export default router;
