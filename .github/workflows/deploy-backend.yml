@@ -3,10 +3,8 @@ name: Deploy Backend to Aliyun
 on:
   push:
     branches: [main]
-    #paths:
-    #  - 'server/**'
     paths-ignore:
-     - 'README.md'
+      - 'README.md'
 
 jobs:
   build-and-deploy:
@@ -21,10 +19,10 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: server/package.json
+          cache-dependency-path: package.json # 这里改了
 
       - name: Install dependencies and Build
-        working-directory: server
+        # 去掉了 working-directory: server
         run: |
           npm install
           npm run build
@@ -35,9 +33,9 @@ jobs:
           host: 47.79.240.134
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "server/*"
+          source: "*" # 上传当前目录所有文件
           target: "/opt/zaofan-server"
-          strip_components: 1
+          strip_components: 0 # 不再需要剥离 server/ 目录层级
 
       - name: Restart PM2
         uses: appleboy/ssh-action@v1.0.3
