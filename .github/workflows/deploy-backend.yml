@@ -1,0 +1,49 @@
+name: Deploy Backend to Aliyun
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: server/package.json
+
+      - name: Install dependencies and Build
+        working-directory: server
+        run: |
+          npm install
+          npm run build
+
+      - name: Deploy to Aliyun via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 47.79.240.134
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "server/*"
+          target: "/opt/zaofan-server"
+          strip_components: 1
+
+      - name: Restart PM2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 47.79.240.134
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/zaofan-server
+            npm install --production
+            pm2 restart zaofan-server || pm2 start dist/index.js --name zaofan-server
