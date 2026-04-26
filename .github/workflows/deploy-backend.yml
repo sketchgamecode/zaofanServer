@@ -3,8 +3,10 @@ name: Deploy Backend to Aliyun
 on:
   push:
     branches: [main]
-    paths:
-      - 'server/**'
+    #paths:
+    #  - 'server/**'
+    paths-ignore:
+     - 'README.md'
 
 jobs:
   build-and-deploy:
