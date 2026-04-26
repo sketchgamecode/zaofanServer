@@ -44,6 +44,17 @@ jobs:
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
+            # 1. 尝试从常见路径加载环境变量
+            [ -f ~/.bashrc ] && source ~/.bashrc
+            [ -f /etc/profile ] && source /etc/profile
+            
+            # 2. 特别针对如果是用 nvm 安装的情况
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+            # 3. 执行真正的逻辑
             cd /opt/zaofan-server
+            # 这一步是为了确保生产环境依赖是最新的
             npm install --production
+            # 重启或启动服务
             pm2 restart zaofan-server || pm2 start dist/index.js --name zaofan-server
