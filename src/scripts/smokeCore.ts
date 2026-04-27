@@ -1,8 +1,10 @@
+import { getAttributeUpgradeCost } from '../config/characterRules.js';
 import { createInitialGameState } from '../engine/gameStateFactory.js';
 import { applyDailyResetIfNeeded } from '../engine/dailyReset.js';
 import { captureResourceSnapshot, grantExp, grantResource, spendResource } from '../engine/resourceService.js';
 import { buildDisabledActionResponse } from '../engine/disabledActions.js';
 import { createActionContext } from '../engine/actionContext.js';
+import { getPlayerInfo } from '../engine/character.js';
 import {
   computeActualDurationSec,
   generateMissions,
@@ -10,7 +12,9 @@ import {
   tavernDrink,
   type TavernInfoData,
 } from '../engine/tavern.js';
+import { equipItem, unequipItem } from '../engine/inventory.js';
 import { completeMission, skipMission, startMission } from '../engine/missions.js';
+import { upgradeAttribute } from '../engine/attributes.js';
 import { GameError } from '../engine/errors.js';
 import type { ActionSuccessResponse } from '../types/action.js';
 
@@ -59,6 +63,103 @@ async function run(): Promise<void> {
 
   const disabled = buildDisabledActionResponse('TAVERN_GET_INFO', 'tavern', state, now);
   assert(disabled.ok && disabled.data.status === 'DISABLED', 'disabled response should be stable');
+
+  const characterState = createInitialGameState({ now, playerId: 'character-user' });
+  characterState.resources.copper = 500;
+  characterState.inventory.items.push(
+    {
+      id: 'eq_weapon_bronze',
+      name: 'Bronze Blade',
+      description: 'smoke weapon',
+      slot: 'weapon',
+      rarity: 1,
+      subType: 'weapon',
+      weaponDamage: { min: 10, max: 16 },
+      price: 30,
+      bonusAttributes: { strength: 2, agility: 1 },
+    },
+    {
+      id: 'eq_body_new',
+      name: 'Leather Vest',
+      description: 'smoke armor',
+      slot: 'body',
+      rarity: 1,
+      subType: 'none',
+      armor: 8,
+      price: 25,
+      bonusAttributes: { constitution: 3 },
+    },
+  );
+  characterState.equipment.equipped.body = {
+    id: 'eq_body_old',
+    name: 'Cloth Shirt',
+    description: 'old armor',
+    slot: 'body',
+    rarity: 0,
+    subType: 'none',
+    armor: 2,
+    price: 5,
+    bonusAttributes: { constitution: 1 },
+  };
+  const characterCtx = createActionContext({ playerId: 'character-user', now, state: characterState });
+  const playerInfo = getPlayerInfo(characterCtx, {});
+  const playerInfoData = playerInfo.data;
+  assert(playerInfo.ok, 'PLAYER_GET_INFO should succeed');
+  assert(playerInfoData.inventory.count === playerInfoData.inventory.items.length, 'PLAYER_GET_INFO inventory.count should equal items.length');
+  assert(playerInfoData.attributes.base.strength === characterState.attributes.strength, 'PLAYER_GET_INFO should return base attributes');
+  assert(playerInfoData.attributes.total.strength >= playerInfoData.attributes.base.strength, 'PLAYER_GET_INFO should return total attributes');
+  assert(playerInfoData.combatPreview.combatRating > 0, 'PLAYER_GET_INFO should return combat preview');
+  assert(characterState.tavern.missionOffers.length === 0, 'PLAYER_GET_INFO must not generate missions');
+  assert(JSON.stringify(playerInfo).includes('combatPreview'), 'PLAYER_GET_INFO should include combatPreview');
+  const playerInfoJson = JSON.stringify(playerInfo);
+  assert(!playerInfoJson.includes('combatSeed'), 'PLAYER_GET_INFO should not leak combatSeed');
+  assert(!playerInfoJson.includes('rewardSeed'), 'PLAYER_GET_INFO should not leak rewardSeed');
+  assert(!playerInfoJson.includes('rewardSnapshot'), 'PLAYER_GET_INFO should not leak rewardSnapshot');
+  assert(!playerInfoJson.includes('hiddenRolls'), 'PLAYER_GET_INFO should not leak hiddenRolls');
+  assert(!playerInfoJson.includes('playerCombatSnapshot'), 'PLAYER_GET_INFO should not leak playerCombatSnapshot');
+  assert(!playerInfoJson.includes('activeMission.playerCombatSnapshot'), 'PLAYER_GET_INFO should not leak activeMission.playerCombatSnapshot');
+
+  const weaponPreviewBefore = playerInfoData.combatPreview.damageMax;
+  const equipWeaponResponse = equipItem(characterCtx, { itemId: 'eq_weapon_bronze' });
+  const equipWeaponData = equipWeaponResponse.data;
+  assert(equipWeaponData.equipment.equipped.weapon?.id === 'eq_weapon_bronze', 'EQUIP_ITEM should equip weapon into empty slot');
+  assert(equipWeaponData.inventory.count === 1, 'EQUIP_ITEM empty slot should reduce inventory count by one');
+  assert(equipWeaponData.combatPreview.damageMax > weaponPreviewBefore, 'EQUIP_ITEM should affect combatPreview');
+
+  const swapPreviewBefore = equipWeaponData.combatPreview.armor;
+  const equipBodyResponse = equipItem(characterCtx, { itemId: 'eq_body_new' });
+  const equipBodyData = equipBodyResponse.data;
+  assert(equipBodyData.equipment.equipped.body?.id === 'eq_body_new', 'EQUIP_ITEM should replace existing slot item');
+  assert(equipBodyData.inventory.items.some((item) => item.id === 'eq_body_old'), 'EQUIP_ITEM swap should return old item to inventory');
+  assert(equipBodyData.inventory.count === 1, 'EQUIP_ITEM swap should preserve total item count');
+  assert(equipBodyData.combatPreview.armor > swapPreviewBefore, 'EQUIP_ITEM swap should update combatPreview');
+
+  const unequipResponse = unequipItem(characterCtx, { slot: 'body' });
+  const unequipData = unequipResponse.data;
+  assert(unequipData.equipment.equipped.body === null, 'UNEQUIP_ITEM should clear equipped slot');
+  assert(unequipData.inventory.items.some((item) => item.id === 'eq_body_new'), 'UNEQUIP_ITEM should move item back to inventory');
+  assert(unequipData.inventory.count === 2, 'UNEQUIP_ITEM should increase inventory count');
+
+  const strengthBeforeUpgrade = characterState.attributes.strength;
+  const copperBeforeUpgrade = characterState.resources.copper;
+  const expectedUpgradeCost = getAttributeUpgradeCost(strengthBeforeUpgrade);
+  const upgradeResponse = upgradeAttribute(characterCtx, { attribute: 'strength' });
+  const upgradeData = upgradeResponse.data;
+  assert(characterState.attributes.strength === strengthBeforeUpgrade + 1, 'UPGRADE_ATTRIBUTE should increment base attribute');
+  assert(characterState.resources.copper === copperBeforeUpgrade - expectedUpgradeCost, 'UPGRADE_ATTRIBUTE should spend copper using pre-upgrade cost');
+  assert(upgradeData.attributes.upgradeCosts.strength === getAttributeUpgradeCost(strengthBeforeUpgrade + 1), 'UPGRADE_ATTRIBUTE should return post-upgrade cost');
+  assert(upgradeData.combatPreview.damageMax >= unequipData.combatPreview.damageMax, 'UPGRADE_ATTRIBUTE should affect combatPreview');
+
+  const noCopperState = createInitialGameState({ now, playerId: 'no-copper-user' });
+  noCopperState.resources.copper = 0;
+  const noCopperCtx = createActionContext({ playerId: 'no-copper-user', now, state: noCopperState });
+  let noCopperRejected = false;
+  try {
+    upgradeAttribute(noCopperCtx, { attribute: 'strength' });
+  } catch (error) {
+    noCopperRejected = error instanceof GameError && error.code === 'NOT_ENOUGH_COPPER';
+  }
+  assert(noCopperRejected, 'UPGRADE_ATTRIBUTE should reject when copper is insufficient');
 
   const tavernState = createInitialGameState({ now, playerId: 'smoke-user' });
   const ctx = createActionContext({ playerId: 'smoke-user', now, state: tavernState });
@@ -174,6 +275,9 @@ async function run(): Promise<void> {
   const successCtx = createActionContext({ playerId: 'success-user', now, state: successState });
   const successOffer = ((getTavernInfo(successCtx, {}) as ActionSuccessResponse<TavernInfoData>).data.tavern.missionOffers[0])!;
   startMission(successCtx, { missionId: successOffer.missionId, offerSetId: successOffer.offerSetId });
+  successState.tavern.activeMission!.enemySnapshot.combatStats.hp = 1;
+  successState.tavern.activeMission!.enemySnapshot.combatStats.damageMin = 1;
+  successState.tavern.activeMission!.enemySnapshot.combatStats.damageMax = 1;
   successState.tavern.activeMission!.endTime = now;
   const successBefore = captureResourceSnapshot(successState);
   const completeSuccessResponse = completeMission(successCtx, {});
@@ -286,6 +390,30 @@ async function run(): Promise<void> {
   const activeDurationBefore = mountSnapshotState.tavern.activeMission!.actualDurationSec;
   mountSnapshotState.mount.timeMultiplierBp = 10000;
   assert(mountSnapshotState.tavern.activeMission!.actualDurationSec === activeDurationBefore, 'mount changes after START_MISSION must not affect active mission duration');
+
+  const snapshotIsolationState = createInitialGameState({ now, playerId: 'snapshot-isolation-user' });
+  snapshotIsolationState.resources.copper = 500;
+  snapshotIsolationState.inventory.items.push({
+    id: 'eq_snapshot_weapon',
+    name: 'Snapshot Spear',
+    description: 'snapshot test weapon',
+    slot: 'weapon',
+    rarity: 2,
+    subType: 'weapon',
+    weaponDamage: { min: 20, max: 28 },
+    price: 50,
+    bonusAttributes: { strength: 4 },
+  });
+  const snapshotIsolationCtx = createActionContext({ playerId: 'snapshot-isolation-user', now, state: snapshotIsolationState });
+  const snapshotOffer = ((getTavernInfo(snapshotIsolationCtx, {}) as ActionSuccessResponse<TavernInfoData>).data.tavern.missionOffers[0])!;
+  startMission(snapshotIsolationCtx, { missionId: snapshotOffer.missionId, offerSetId: snapshotOffer.offerSetId });
+  const lockedSnapshot = JSON.stringify(snapshotIsolationState.tavern.activeMission!.playerCombatSnapshot);
+  equipItem(snapshotIsolationCtx, { itemId: 'eq_snapshot_weapon' });
+  upgradeAttribute(snapshotIsolationCtx, { attribute: 'strength' });
+  assert(
+    JSON.stringify(snapshotIsolationState.tavern.activeMission!.playerCombatSnapshot) === lockedSnapshot,
+    'activeMission.playerCombatSnapshot should remain unchanged after equip/upgrade',
+  );
 
   const completeJson = JSON.stringify(completeSuccessResponse);
   assert(!completeJson.includes('combatSeed'), 'COMPLETE_MISSION response should not leak combatSeed');

@@ -80,6 +80,7 @@ export interface BattleSide {
   damageMax: number;
   critChanceBp: number;
   dodgeChanceBp?: number;
+  blockChanceBp?: number;
   armor: number;
   level: number;
 }
@@ -203,6 +204,7 @@ export function buildPlayerBattleSide(state: GameState): BattleSide {
     damageMax,
     critChanceBp: Math.floor(MathCore.getCritChance(attrs.luck, state.player.level) * 10000),
     dodgeChanceBp: Math.min(2500, attrs.agility * 15),
+    blockChanceBp: undefined,
     armor: Math.min(totalArmor, classConf.armorCap * state.player.level),
     level: state.player.level,
   };

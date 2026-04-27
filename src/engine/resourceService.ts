@@ -1,5 +1,6 @@
 import { MAX_LEVEL, XP_TABLE } from '../data/xpTable.js';
 import { GameError } from './errors.js';
+import type { GameErrorCode } from './errors.js';
 import type { GameState, ResourceState } from '../types/gameState.js';
 
 export type ResourceKind = keyof ResourceState;
@@ -24,14 +25,24 @@ export function captureResourceSnapshot(state: GameState): ResourceSnapshot {
   };
 }
 
-export function assertEnoughResource(state: GameState, kind: ResourceKind, amount: number): void {
+export function assertEnoughResource(
+  state: GameState,
+  kind: ResourceKind,
+  amount: number,
+  errorCode: GameErrorCode = 'INVALID_GAME_STATE',
+): void {
   if (state.resources[kind] < amount) {
-    throw new GameError('INVALID_GAME_STATE', `Not enough ${kind}`);
+    throw new GameError(errorCode, `Not enough ${kind}`);
   }
 }
 
-export function spendResource(state: GameState, kind: ResourceKind, amount: number): void {
-  assertEnoughResource(state, kind, amount);
+export function spendResource(
+  state: GameState,
+  kind: ResourceKind,
+  amount: number,
+  errorCode: GameErrorCode = 'INVALID_GAME_STATE',
+): void {
+  assertEnoughResource(state, kind, amount, errorCode);
   state.resources[kind] -= amount;
 }
 

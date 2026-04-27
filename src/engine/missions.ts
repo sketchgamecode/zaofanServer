@@ -11,6 +11,7 @@ import type {
   RewardSnapshot,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
+import { buildPlayerCombatSnapshot } from './characterCombat.js';
 import { generateEquipment } from './equipmentGenerator.js';
 import { GameError } from './errors.js';
 import { buildPlayerBattleSide, getTotalAttributes, serverSimulateBattle } from './mathCore.js';
@@ -48,44 +49,6 @@ function emptyGrantedReward(): GrantedReward {
     copper: 0,
     tokens: 0,
     hourglass: 0,
-  };
-}
-
-function buildPlayerCombatSnapshot(state: GameState): PlayerCombatSnapshot {
-  const attrs = getTotalAttributes(state);
-  const battleSide = buildPlayerBattleSide(state);
-  const weapon = state.equipment.equipped.weapon;
-  const offHand = state.equipment.equipped.offHand;
-  const itemPowerTotal = Object.values(state.equipment.equipped).reduce((sum, item) => {
-    if (!item) return sum;
-    const statPower = Object.values(item.bonusAttributes).reduce((acc, value) => acc + (value ?? 0), 0);
-    const weaponPower = item.weaponDamage ? item.weaponDamage.min + item.weaponDamage.max : 0;
-    return sum + (item.armor ?? 0) + statPower + weaponPower;
-  }, 0);
-
-  return {
-    level: state.player.level,
-    classId: state.player.classId,
-    attributes: {
-      strength: attrs.strength,
-      intelligence: attrs.intelligence,
-      agility: attrs.agility,
-      constitution: attrs.constitution,
-      luck: attrs.luck,
-    },
-    combatStats: {
-      hp: battleSide.hp,
-      armor: battleSide.armor,
-      damageMin: battleSide.damageMin,
-      damageMax: battleSide.damageMax,
-      critChanceBp: battleSide.critChanceBp,
-      dodgeChanceBp: battleSide.dodgeChanceBp,
-    },
-    equipmentSummary: {
-      weaponId: weapon?.id,
-      offHandId: offHand?.id,
-      itemPowerTotal,
-    },
   };
 }
 

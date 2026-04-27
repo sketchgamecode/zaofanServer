@@ -1,43 +1,77 @@
 import { Request, Response, NextFunction } from 'express';
+import { getRequestMetadata, logServerEvent } from '../lib/observability.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 
 /**
- * 身份验证中间件
- * 验证请求头中的 Authorization: Bearer <user_jwt_token>
- * 通过 Supabase 验证 token 合法性，并将用户信息挂载到 req.user
+ * Require a valid Supabase bearer token and attach the user to req.user.
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
+  const requestMeta = getRequestMetadata(req, res);
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: '未授权：缺少 Authorization header' });
+    logServerEvent(
+      'auth_rejected',
+      {
+        ...requestMeta,
+        ok: false,
+        errorCode: 'UNAUTHORIZED',
+        message: 'Missing or invalid Authorization header',
+      },
+      'error',
+    );
+
+    res.status(401).json({ error: 'Unauthorized: missing Authorization header' });
     return;
   }
 
   const token = authHeader.replace('Bearer ', '');
-
-  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+  const {
+    data: { user },
+    error,
+  } = await supabaseAdmin.auth.getUser(token);
 
   if (error || !user) {
-    res.status(401).json({ error: '未授权：token 无效或已过期' });
+    logServerEvent(
+      'auth_rejected',
+      {
+        ...requestMeta,
+        ok: false,
+        errorCode: 'UNAUTHORIZED',
+        message: 'Supabase token is invalid or expired',
+      },
+      'error',
+    );
+
+    res.status(401).json({ error: 'Unauthorized: token is invalid or expired' });
     return;
   }
 
-  // 把用户信息挂到 req 上，后续路由直接用
   (req as any).user = user;
   next();
 }
 
 /**
- * 管理员权限中间件
- * 在 requireAuth 之后使用，额外验证 ADMIN_SECRET header
- * 用于保护后台管理接口（发通宝、查玩家、写日志等）
+ * Require the x-admin-secret header after requireAuth.
  */
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const adminSecret = req.headers['x-admin-secret'];
+  const requestMeta = getRequestMetadata(req, res);
 
   if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
-    res.status(403).json({ error: '禁止访问：需要管理员权限' });
+    logServerEvent(
+      'admin_rejected',
+      {
+        ...requestMeta,
+        playerId: (req as any).user?.id ?? null,
+        ok: false,
+        errorCode: 'FORBIDDEN',
+        message: 'Admin secret is missing or invalid',
+      },
+      'error',
+    );
+
+    res.status(403).json({ error: 'Forbidden: admin secret is required' });
     return;
   }
 

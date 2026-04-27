@@ -1,6 +1,12 @@
 import type { ActionErrorResponse } from '../types/action.js';
 
 export type GameErrorCode =
+  | 'ITEM_NOT_FOUND'
+  | 'INVALID_EQUIPMENT_SLOT'
+  | 'EQUIP_SLOT_MISMATCH'
+  | 'EMPTY_EQUIPMENT_SLOT'
+  | 'INVALID_ATTRIBUTE_KEY'
+  | 'NOT_ENOUGH_COPPER'
   | 'UNKNOWN_ACTION'
   | 'ACTION_DISABLED'
   | 'INVALID_GAME_STATE'

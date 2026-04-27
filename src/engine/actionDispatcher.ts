@@ -1,17 +1,17 @@
 import type { ActionResponse, GameActionEnvelope } from '../types/action.js';
 import type { ActionContext } from './actionContext.js';
 import { buildDisabledActionResponse } from './disabledActions.js';
+import { upgradeAttribute } from './attributes.js';
+import { getPlayerInfo } from './character.js';
 import { debugResetSave } from './debugActions.js';
 import { GameError, toActionErrorResponse } from './errors.js';
+import { equipItem, unequipItem } from './inventory.js';
 import { completeMission, skipMission, startMission } from './missions.js';
 import { generateMissions, getTavernInfo, tavernDrink } from './tavern.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
 const DISABLED_ACTIONS: Record<string, string> = {
-  UPGRADE_ATTRIBUTE: 'attributes',
-  EQUIP_ITEM: 'inventory',
-  UNEQUIP_ITEM: 'inventory',
   BLACK_MARKET_REFRESH: 'blackMarket',
   BLACK_MARKET_BUY: 'blackMarket',
   ARENA_FIGHT: 'arena',
@@ -24,6 +24,10 @@ const DISABLED_ACTIONS: Record<string, string> = {
 
 const ACTION_HANDLERS: Record<string, Handler> = {
   DEBUG_RESET_SAVE: debugResetSave,
+  PLAYER_GET_INFO: getPlayerInfo,
+  UPGRADE_ATTRIBUTE: upgradeAttribute,
+  EQUIP_ITEM: equipItem,
+  UNEQUIP_ITEM: unequipItem,
   TAVERN_GET_INFO: getTavernInfo,
   GENERATE_MISSIONS: generateMissions,
   TAVERN_DRINK: tavernDrink,

@@ -13,6 +13,7 @@ export type EquipmentSlot =
   | 'offHand';
 
 export type ItemRarity = 0 | 1 | 2 | 3 | 4;
+export type AttributeKey = 'strength' | 'intelligence' | 'agility' | 'constitution' | 'luck';
 
 export type AttributeState = {
   strength: number;
@@ -66,6 +67,56 @@ export type InventoryState = {
 
 export type EquipmentState = {
   equipped: Record<EquipmentSlot, EquipmentItem | null>;
+};
+
+export type UpgradeCostsView = Record<AttributeKey, number>;
+
+export type CombatPreviewView = {
+  hp: number;
+  armor: number;
+  damageMin: number;
+  damageMax: number;
+  critChanceBp: number;
+  dodgeChanceBp?: number;
+  blockChanceBp?: number;
+  itemPowerTotal: number;
+  combatRating: number;
+};
+
+export type CharacterInfoView = {
+  player: {
+    level: number;
+    exp: number;
+    classId: PlayerClassId;
+    displayName?: string;
+  };
+  resources: ResourceState;
+  attributes: {
+    base: Omit<AttributeState, 'unspentPoints'>;
+    total: Omit<AttributeState, 'unspentPoints'>;
+    upgradeCosts: UpgradeCostsView;
+  };
+  combatPreview: CombatPreviewView;
+  equipment: {
+    equipped: EquipmentState['equipped'];
+  };
+  inventory: {
+    capacity?: number;
+    count: number;
+    items: EquipmentItem[];
+  };
+};
+
+export type EquipItemPayload = {
+  itemId: string;
+};
+
+export type UnequipItemPayload = {
+  slot: EquipmentSlot;
+};
+
+export type UpgradeAttributePayload = {
+  attribute: AttributeKey;
 };
 
 export type VisibleReward = {
@@ -297,6 +348,27 @@ export type GameState = {
   arena: ArenaState;
   dungeon: DungeonState;
 };
+
+export function isEquipmentSlot(value: unknown): value is EquipmentSlot {
+  return value === 'head'
+    || value === 'body'
+    || value === 'hands'
+    || value === 'feet'
+    || value === 'neck'
+    || value === 'belt'
+    || value === 'ring'
+    || value === 'trinket'
+    || value === 'weapon'
+    || value === 'offHand';
+}
+
+export function isAttributeKey(value: unknown): value is AttributeKey {
+  return value === 'strength'
+    || value === 'intelligence'
+    || value === 'agility'
+    || value === 'constitution'
+    || value === 'luck';
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

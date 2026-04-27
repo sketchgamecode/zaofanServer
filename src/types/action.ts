@@ -1,6 +1,7 @@
 import type { GameState } from './gameState.js';
 
 export type GameActionName =
+  | 'PLAYER_GET_INFO'
   | 'TAVERN_GET_INFO'
   | 'GENERATE_MISSIONS'
   | 'TAVERN_DRINK'
