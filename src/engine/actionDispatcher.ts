@@ -8,10 +8,12 @@ import { GameError, toActionErrorResponse } from './errors.js';
 import { equipItem, unequipItem } from './inventory.js';
 import { completeMission, skipMission, startMission } from './missions.js';
 import { generateMissions, getTavernInfo, tavernDrink } from './tavern.js';
+import { refreshBlackMarket, buyAndEquipItem } from './blackMarket.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
 const DISABLED_ACTIONS: Record<string, string> = {
+  // 旧版黑市 API（已废弃，保留以防客户端未升级时报 UNKNOWN_ACTION）
   BLACK_MARKET_REFRESH: 'blackMarket',
   BLACK_MARKET_BUY: 'blackMarket',
   ARENA_FIGHT: 'arena',
@@ -23,17 +25,20 @@ const DISABLED_ACTIONS: Record<string, string> = {
 };
 
 const ACTION_HANDLERS: Record<string, Handler> = {
-  DEBUG_RESET_SAVE: debugResetSave,
-  PLAYER_GET_INFO: getPlayerInfo,
-  UPGRADE_ATTRIBUTE: upgradeAttribute,
-  EQUIP_ITEM: equipItem,
-  UNEQUIP_ITEM: unequipItem,
-  TAVERN_GET_INFO: getTavernInfo,
-  GENERATE_MISSIONS: generateMissions,
-  TAVERN_DRINK: tavernDrink,
-  START_MISSION: startMission,
-  COMPLETE_MISSION: completeMission,
-  SKIP_MISSION: skipMission,
+  'DEBUG_RESET_SAVE': debugResetSave,
+  'PLAYER_GET_INFO': getPlayerInfo,
+  'UPGRADE_ATTRIBUTE': upgradeAttribute,
+  'EQUIP_ITEM': equipItem,
+  'UNEQUIP_ITEM': unequipItem,
+  'TAVERN_GET_INFO': getTavernInfo,
+  'GENERATE_MISSIONS': generateMissions,
+  'TAVERN_DRINK': tavernDrink,
+  'START_MISSION': startMission,
+  'COMPLETE_MISSION': completeMission,
+  'SKIP_MISSION': skipMission,
+  // 黑市系统
+  'REFRESH_BLACKMARKET': refreshBlackMarket,
+  'BUY_AND_EQUIP_ITEM': buyAndEquipItem,
 };
 
 export async function dispatchAction(
@@ -44,6 +49,7 @@ export async function dispatchAction(
   const payload = actionEnvelope.payload ?? {};
 
   try {
+    console.log('Registered actions:', Object.keys(ACTION_HANDLERS));
     const handler = ACTION_HANDLERS[action];
     if (handler) {
       return await handler(ctx, payload);

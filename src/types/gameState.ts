@@ -119,6 +119,16 @@ export type UpgradeAttributePayload = {
   attribute: AttributeKey;
 };
 
+export type RefreshBlackMarketPayload = {
+  /** true = 消耗1令牌立即手动刷新；false / 缺省 = 仅在1小时冷却到期后刷新 */
+  force?: boolean;
+};
+
+export type BuyAndEquipPayload = {
+  /** 要购买并穿戴的商品 id，必须存在于 blackMarket.items 中 */
+  itemId: string;
+};
+
 export type VisibleReward = {
   xp: number;
   copper: number;

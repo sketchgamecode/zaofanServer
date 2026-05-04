@@ -54,7 +54,7 @@ router.post('/', requireAuth, async (req: Request, res: Response): Promise<void>
   }
 
   const actionEnvelope: GameActionEnvelope = {
-    action: parsed.data.action,
+    action: parsed.data.action.trim(),
     payload: parsed.data.payload,
   };
 

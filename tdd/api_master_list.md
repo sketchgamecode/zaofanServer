@@ -100,11 +100,18 @@
 | `START_MISSION` | 开始一个酒馆任务 | `{"missionId": "id"}` | `TavernInfoData` |
 | `COMPLETE_MISSION` | 结算当前已完成的任务 | `{}` | `CompleteMissionData` |
 | `SKIP_MISSION` | 使用沙漏或令牌跳过任务等待 | `{}` | `CompleteMissionData` |
+| `REFRESH_BLACKMARKET` | 刷新黑市商品（自动或消耗令牌手动刷新） | `{"force": false}` | `BlackMarketView` |
+| `BUY_AND_EQUIP_ITEM` | 购买黑市商品并立即穿戴至对应槽位 | `{"itemId": "eq_xxx"}` | `BuyAndEquipView` |
 | `DEBUG_RESET_SAVE` | **(仅开发)** 重置存档 | `{}` | `{ "reset": true }` |
 
-### 4.2 暂未实现的动作 (Disabled Actions)
+### 4.2 废弃动作 (Deprecated — 请勿新接)
+调用以下动作将返回带有 `DISABLED` 状态的响应（旧 API 兼容保留，**Client Agent 应改用上方新名称**）：
+`BLACK_MARKET_REFRESH` → 请改用 `REFRESH_BLACKMARKET`
+`BLACK_MARKET_BUY` → 请改用 `BUY_AND_EQUIP_ITEM`
+
+### 4.3 暂未实现的动作 (Disabled Actions)
 调用以下动作将返回 `503` 或带有 `DISABLED` 状态的响应：
-`BLACK_MARKET_REFRESH`, `BLACK_MARKET_BUY`, `ARENA_FIGHT`, `ARENA_SKIP_COOLDOWN`, `GUARD_WORK_START`, `GUARD_WORK_CLAIM`, `DUNGEON_FIGHT`.
+`ARENA_FIGHT`, `ARENA_SKIP_COOLDOWN`, `GUARD_WORK_START`, `GUARD_WORK_CLAIM`, `DUNGEON_FIGHT`.
 
 ---
 
@@ -127,6 +134,44 @@
 *   `grantedReward`: 实际获得的奖励内容。
 *   `playerDelta`: 玩家资源变动前后的对比。
 
+### BlackMarketView
+`REFRESH_BLACKMARKET` 的返回 data：
+```typescript
+{
+  status: 'ACTIVE';
+  items: EquipmentItem[];        // 兵器铺(6) + 奇珍阁(6) = 共12件，前端按 slot 类型过滤分组展示
+  nextAutoRefreshMs: number;     // 距下次免费刷新的剩余毫秒数，0 表示可立即刷新
+}
+```
+
+### BuyAndEquipView
+`BUY_AND_EQUIP_ITEM` 的返回 data：
+```typescript
+{
+  purchasedItemId: string;         // 已购商品 id
+  copperSpent: number;             // 实际扣除的铜钱数
+  unequippedItem: EquipmentItem | null; // 被替换下的旧装备（已自动入背包），无则 null
+  remainingItems: EquipmentItem[]; // 购买后黑市剩余商品
+  nextAutoRefreshMs: number;
+}
+```
+
+### EquipmentItem (关键字段)
+```typescript
+{
+  id: string;           // 唯一标识，格式：eq_{slot}_{time36}_{rand16}
+  name: string;         // 物品显示名称（中文）
+  description: string;  // 黑色幽默风格文案
+  slot: EquipmentSlot;  // 'head'|'body'|'hands'|'feet'|'neck'|'belt'|'ring'|'trinket'|'weapon'|'offHand'
+  rarity: 0|1|2|3|4;   // 品质：0普通/1优秀/2史诗/3传说/4神器
+  subType: 'weapon'|'shield'|'none';
+  armor?: number;       // 仅 head/body/hands/feet/belt 槽位有值
+  weaponDamage?: { min: number; max: number }; // 仅 weapon 槽（及高品质 offHand）有值
+  price: number;        // 购买价格（铜钱）
+  bonusAttributes: Partial<AttributeState>; // 各属性加成（只列出非零值）
+}
+```
+
 ---
 
 ## 6. 调用示例 (cURL)
@@ -140,6 +185,30 @@ curl -X POST http://localhost:3001/api/action/ \
     "action": "START_MISSION",
     "payload": { "missionId": "mission_offer_0" }
   }'
+```
+
+**刷新黑市 (首次 / 冷却到期):**
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "REFRESH_BLACKMARKET", "payload": {"force": false}}'
+```
+
+**手动刷新黑市 (消耗 1 令牌):**
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "REFRESH_BLACKMARKET", "payload": {"force": true}}'
+```
+
+**购买并穿戴装备:**
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "BUY_AND_EQUIP_ITEM", "payload": {"itemId": "eq_weapon_abc123_ff"}}'
 ```
 
 ---
