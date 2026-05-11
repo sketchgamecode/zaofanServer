@@ -39,6 +39,9 @@ export function buildPlayerCombatSnapshot(state: GameState): PlayerCombatSnapsho
   const equipmentSummary = getEquipmentSummary(state.equipment.equipped, state.player.level);
 
   return {
+    playerId: state.player.id,
+    displayName: state.player.displayName,
+    avatarId: state.player.avatarId,
     level: state.player.level,
     classId: state.player.classId,
     attributes: {

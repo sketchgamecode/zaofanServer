@@ -124,7 +124,55 @@
 
 1.  **总属性计算**: `Total = Base + EquipmentBonus + GuildBonus(如果有)`。
 2.  **任务时长**: 存档中的 `actualDurationSec` 是已经应用了坐骑加成后的最终秒数。
-3.  **战斗模拟**: 战斗是在后端计算的，存档中的 `battleResult.rounds` 包含了每一回合的攻击者、伤害和剩余血量，前端应根据此数组播放动画。
+3.  **战斗模拟**: 战斗是在后端计算的，当前唯一支持的战斗播放契约是 `BattleResultV2`。前端应根据 `battleResult.actions[].hits[]` 播放动画，不得重新计算战斗。
 
 ---
-*Last Updated: 2026-05-10*
+---
+
+## 5. 2026-05-11 Combat / Arena / Replay Schema Notes
+
+### BattleResultV2
+
+`MissionSettlement.battleResult` stores `BattleResultV2` directly:
+
+```typescript
+type MissionSettlement = {
+  missionId: string;
+  offerSetId: string;
+  settledAt: number;
+  result: 'SUCCESS' | 'FAILED';
+  rewardGranted: boolean;
+  battleResult: BattleResultV2;
+  canSaveReplay?: boolean;
+  replayId?: string | null;
+  playerDelta: PlayerDelta;
+};
+```
+
+There is no legacy `BattleResult.rounds` compatibility contract. This project follows the clean-wipe upgrade policy in `server/tdd/server_agent_common_rules.md`.
+
+### ArenaState
+
+`ArenaState` now supports:
+
+```typescript
+{
+  status: 'UNINITIALIZED' | 'DISABLED' | 'ACTIVE';
+  honor: number;
+  rank: number | null;
+  dailyWins: number;      // currently mirrors daily XP wins for UI convenience
+  dailyXpWins: number;
+  maxDailyXpWins: number;
+  fightsToday: number;
+  lastDailyResetDate: string;
+  cooldownEndTime: number | null;
+  candidateSetId: string | null;
+  candidates: ArenaOpponentPreview[];
+}
+```
+
+### Replay persistence
+
+Large historical battle replays are not embedded in `GameState`. They live in the independent `battle_replays` table as `BattleReplayRecord`. Tavern `lastSettlement` may keep the most recent replay for immediate settlement UI and manual save, but mailbox history should read from `battle_replays`.
+
+*Last Updated: 2026-05-11*

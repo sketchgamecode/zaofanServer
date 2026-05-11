@@ -7,6 +7,7 @@ import type {
   GameState,
   GrantedReward,
   MissionSettlement,
+  BattleResultV2,
   PlayerCombatSnapshot,
   RewardSnapshot,
 } from '../types/gameState.js';
@@ -27,15 +28,9 @@ export type CompleteMissionData = {
   result: 'SUCCESS' | 'FAILED' | 'ALREADY_SETTLED';
   missionId: string;
   offerSetId: string;
-  battleResult: GameState['tavern']['lastSettlement'] extends infer _T
-    ? {
-        playerWon: boolean;
-        rounds: { attacker: 'player' | 'enemy'; damage: number; targetHpAfter: number; wasCrit?: boolean }[];
-        playerHpEnd: number;
-        enemyHpEnd: number;
-        totalRounds: number;
-      }
-    : never;
+  battleResult: BattleResultV2;
+  canSaveReplay: boolean;
+  replayId: string | null;
   rewardGranted: boolean;
   grantedReward: GrantedReward;
   playerDelta: MissionSettlement['playerDelta'];
@@ -65,6 +60,7 @@ function buildEnemySnapshot(player: PlayerCombatSnapshot, offer: GameState['tave
     enemyId: offer.enemyPreview.enemyId,
     name: offer.enemyPreview.name,
     level,
+    classId: rng.pick(['CLASS_A', 'CLASS_B', 'CLASS_C', 'CLASS_D', 'CLASS_E'] as const),
     attributes: {
       strength: Math.max(1, Math.floor(player.attributes.strength * hpRatioBp / 10000)),
       intelligence: Math.max(1, Math.floor(player.attributes.intelligence * hpRatioBp / 10000)),
@@ -185,6 +181,8 @@ function buildCompleteMissionData(
     missionId: settlement.missionId,
     offerSetId: settlement.offerSetId,
     battleResult: settlement.battleResult,
+    canSaveReplay: settlement.canSaveReplay ?? false,
+    replayId: settlement.replayId ?? null,
     rewardGranted: settlement.rewardGranted,
     grantedReward: settlement.grantedReward,
     playerDelta: settlement.playerDelta,
@@ -335,6 +333,8 @@ export function completeMission(
     rewardSnapshot: activeMission.rewardSnapshot,
     grantedReward,
     battleResult,
+    canSaveReplay: true,
+    replayId: null,
     playerDelta: buildPlayerDelta(before, after),
   };
 

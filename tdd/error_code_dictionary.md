@@ -67,4 +67,20 @@
 | `INVALID_ATTRIBUTE_KEY` | 提交了不存在的属性名 | 代码级错误 |
 
 ---
-*Last Updated: 2026-05-04*
+---
+
+## 7. 竞技场与战斗回放
+
+| ErrorCode | 含义 | 推荐交互策略 |
+| :--- | :--- | :--- |
+| `ARENA_COOLDOWN_ACTIVE` | 竞技场冷却未结束 | 显示剩余时间和跳过冷却入口 |
+| `ARENA_TARGET_NOT_FOUND` | 目标不存在、候选过期或不在当前候选集中 | 刷新候选列表 |
+| `ARENA_SELF_TARGET` | 玩家尝试挑战自己 | 禁用自身挑战入口 |
+| `ARENA_DISABLED` | 竞技场系统关闭 | 显示系统维护提示 |
+| `INSUFFICIENT_PREMIUM_RESOURCE` | 跳过冷却所需沙漏/令牌不足 | 引导获取资源 |
+| `BATTLE_REPLAY_NOT_FOUND` | 邮箱回放不存在或不属于当前玩家 | 刷新回放列表 |
+| `BATTLE_REPLAY_READ_FAILED` | 回放读取失败 | 提示重试 |
+| `BATTLE_REPLAY_WRITE_FAILED` | 回放写入/删除失败 | 提示重试，避免前端标记成功 |
+| `MISSION_REPLAY_NOT_AVAILABLE` | 当前没有可手动保存的酒馆任务回放 | 隐藏或禁用保存按钮 |
+
+*Last Updated: 2026-05-11*

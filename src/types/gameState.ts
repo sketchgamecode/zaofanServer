@@ -204,6 +204,9 @@ export type MountSnapshot = {
 };
 
 export type PlayerCombatSnapshot = {
+  playerId?: string;
+  displayName?: string;
+  avatarId?: string;
   level: number;
   classId?: PlayerClassId;
   attributes: BaseAttributeValues;
@@ -227,6 +230,8 @@ export type EnemySnapshot = {
   enemyId: string;
   name: string;
   level: number;
+  classId?: PlayerClassId;
+  avatarId?: string;
   attributes: BaseAttributeValues;
   combatStats: {
     hp: number;
@@ -237,6 +242,32 @@ export type EnemySnapshot = {
     dodgeChanceBp?: number;
   };
   enemyPowerRatioBp: number;
+};
+
+export type BattleContext =
+  | 'MISSION'
+  | 'ARENA'
+  | 'DUNGEON'
+  | 'FORTRESS_ATTACK'
+  | 'FORTRESS_DEFENSE';
+
+export type CombatantSnapshot = {
+  id: string;
+  displayName: string;
+  level: number;
+  classId: PlayerClassId;
+  attributes: BaseAttributeValues;
+  hpMax?: number;
+  armor: number;
+  weaponDamage: { min: number; max: number };
+  honor?: number;
+  rank?: number | null;
+  avatarId?: string;
+  equipmentSummary?: {
+    weaponId?: string;
+    offHandId?: string;
+    itemPowerTotal: number;
+  };
 };
 
 export type DungeonKey = {
@@ -268,19 +299,59 @@ export type GrantedReward = {
   dungeonKey?: DungeonKey;
 };
 
-export type BattleRound = {
+export type BattleHitEvent = {
+  hitIndex: number;
   attacker: 'player' | 'enemy';
+  defender: 'player' | 'enemy';
+  attackerClassId: PlayerClassId;
+  defenderClassId: PlayerClassId;
+  rawWeaponRoll: number;
   damage: number;
   targetHpAfter: number;
-  wasCrit?: boolean;
+  wasCrit: boolean;
+  wasBlocked: boolean;
+  wasDodged: boolean;
+  armorReductionBp: number;
+  rageMultiplierBp: number;
 };
 
-export type BattleResult = {
+export type BattleActionEvent = {
+  actionIndex: number;
+  roundNumber: number;
+  attacker: 'player' | 'enemy';
+  hits: BattleHitEvent[];
+};
+
+export type BattleResultV2 = {
+  schemaVersion: 2;
+  context: BattleContext;
+  seedPublicHash: string;
+  winner: 'player' | 'enemy';
   playerWon: boolean;
-  rounds: BattleRound[];
-  playerHpEnd: number;
-  enemyHpEnd: number;
+  player: {
+    id: string;
+    name: string;
+    level: number;
+    classId: PlayerClassId;
+    hpMax: number;
+    hpEnd: number;
+    avatarId?: string;
+    snapshot: CombatantSnapshot;
+  };
+  enemy: {
+    id: string;
+    name: string;
+    level: number;
+    classId: PlayerClassId;
+    hpMax: number;
+    hpEnd: number;
+    avatarId?: string;
+    snapshot: CombatantSnapshot;
+  };
+  actions: BattleActionEvent[];
+  totalActions: number;
   totalRounds: number;
+  endedBy: 'KNOCKOUT' | 'ROUND_LIMIT';
 };
 
 export type PlayerDelta = {
@@ -345,7 +416,9 @@ export type MissionSettlement = {
   rewardGranted: boolean;
   rewardSnapshot: RewardSnapshot;
   grantedReward: GrantedReward;
-  battleResult: BattleResult;
+  battleResult: BattleResultV2;
+  canSaveReplay?: boolean;
+  replayId?: string | null;
   playerDelta: PlayerDelta;
 };
 
@@ -376,8 +449,62 @@ export type BlackMarketState = {
 export type ArenaState = {
   status: 'UNINITIALIZED' | 'DISABLED' | 'ACTIVE';
   dailyWins: number;
+  honor?: number;
+  rank?: number | null;
+  dailyXpWins?: number;
+  maxDailyXpWins?: number;
+  fightsToday?: number;
   lastDailyResetDate: string;
   cooldownEndTime: number | null;
+  candidateSetId?: string | null;
+  candidates?: ArenaOpponentPreview[];
+};
+
+export type ArenaOpponentPreview = {
+  candidateId: string;
+  playerId: string;
+  displayName: string;
+  avatarId?: string;
+  level: number;
+  classId: PlayerClassId;
+  raceId?: RaceId;
+  honor: number;
+  rank: number;
+  guildName?: string;
+  attributes: BaseAttributeValues;
+  combatPreview: {
+    hp: number;
+    armor: number;
+    damageMin: number;
+    damageMax: number;
+    critChanceBp: number;
+    blockChanceBp?: number;
+    dodgeChanceBp?: number;
+  };
+};
+
+export type BattleReplayRecord = {
+  replayId: string;
+  ownerPlayerId: string;
+  context: BattleContext;
+  createdAt: number;
+  expiresAt?: number | null;
+  isRead: boolean;
+  isSavedByPlayer?: boolean;
+  relatedPlayerId?: string | null;
+  sourceId?: string | null;
+  title: string;
+  opponentName: string;
+  preview: {
+    type: 'PLAYER' | 'DUNGEON' | 'QUEST';
+    result: 'WIN' | 'LOSE';
+    playerName: string;
+    enemyName: string;
+    playerAvatarId?: string;
+    enemyAvatarId?: string;
+    enemyLevel: number;
+  };
+  battleResult: BattleResultV2;
 };
 
 export type DungeonState = {

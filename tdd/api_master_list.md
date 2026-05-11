@@ -114,7 +114,7 @@
 
 ### 4.3 暂未实现的动作 (Disabled Actions)
 调用以下动作将返回 `503` 或带有 `DISABLED` 状态的响应：
-`ARENA_FIGHT`, `ARENA_SKIP_COOLDOWN`, `GUARD_WORK_START`, `GUARD_WORK_CLAIM`, `DUNGEON_FIGHT`.
+`GUARD_WORK_START`, `GUARD_WORK_CLAIM`.
 
 ---
 
@@ -134,7 +134,7 @@
 ### CompleteMissionData
 任务结算结果：
 *   `result`: `SUCCESS` (成功) 或 `FAILED` (失败)。
-*   `battleResult`: 详细的战斗回放（回合数据、伤害等）。
+*   `battleResult`: `BattleResultV2`，用于战斗播放与手动保存酒馆任务回放；不再提供旧 `BattleResult.rounds`。
 *   `grantedReward`: 实际获得的奖励内容。
 *   `playerDelta`: 玩家资源变动前后的对比。
 
@@ -225,4 +225,401 @@ curl -X POST http://localhost:3001/api/action/ \
 ```
 
 ---
-*Last Updated: 2026-05-04*
+---
+
+## 7. 2026-05-11 Combat / Arena / Replay API Update
+
+### New active actions
+
+| Action | Payload | Return data |
+| :--- | :--- | :--- |
+| `ARENA_GET_INFO` | `{}` | `{ arena, playerSummary }` |
+| `ARENA_REFRESH_CANDIDATES` | `{}` | `{ candidateSetId, candidates }` |
+| `ARENA_FIGHT` | `{ "targetPlayerId": "id", "candidateSetId": "optional" }` | `BattleResultV2`, `replayId`, honor/rank/reward deltas, cooldown, next candidates |
+| `ARENA_SKIP_COOLDOWN` | `{}` | `{ cooldownEndTime: null, spent: "hourglasses" \| "tokens" }` |
+| `MAIL_GET_BATTLE_REPLAYS` | `{ "limit": 50 }` | replay list items without the large `battleResult` payload |
+| `MAIL_GET_BATTLE_REPLAY` | `{ "replayId": "battle_..." }` | full `BattleReplayRecord` with `BattleResultV2` |
+| `MAIL_SAVE_MISSION_REPLAY` | `{}` | saves latest tavern settlement replay once; repeated calls return `alreadySaved: true` |
+| `MAIL_DELETE_BATTLE_REPLAY` | `{ "replayId": "battle_..." }` | `{ deleted: true, replayId }` |
+| `DUNGEON_FIGHT` | `{ "chapterId": "optional" }` | `BattleResultV2`, `replayId`, progress and reward deltas |
+
+Hall of Fame / 英雄谱 list, search, rank-location, and player mirror detail APIs are not part of this handoff. Client work for Hall of Fame should stay as a placeholder or static entry until explicit server actions are added.
+
+### BattleResultV2
+
+All combat responses now use `BattleResultV2` directly. Tavern mission settlement returns `battleResult: BattleResultV2`; there is no legacy `BattleResult.rounds` compatibility contract. V2 stores frozen combatant snapshots, HP maxima/end values, per-action hit arrays, crit/block/dodge flags, armor reduction, rage multiplier, and `endedBy`.
+
+### Replay storage
+
+Battle replay archives are stored in the independent Supabase table `battle_replays`. Arena replays are saved automatically. Tavern mission replays are saved only through `MAIL_SAVE_MISSION_REPLAY`.
+
+*Last Updated: 2026-05-11*
+
+---
+
+## 8. Client Agent Integration Contract - Combat, Arena, Dungeon, Mail Replays
+
+This section is the authoritative short-form contract for the client agent after the 2026-05-11 combat backend update. All APIs below use the common `POST /api/action/` envelope:
+
+```typescript
+type ActionResponse<T> =
+  | { ok: true; action: string; serverTime: number; stateRevision: number; data: T }
+  | { ok: false; action: string; serverTime: number; stateRevision?: number; errorCode: string; message: string };
+```
+
+### 8.1 New / Updated Active Actions
+
+| Action | Payload | Success data |
+| :--- | :--- | :--- |
+| `ARENA_GET_INFO` | `{}` | `ArenaGetInfoData` |
+| `ARENA_REFRESH_CANDIDATES` | `{}` | `ArenaRefreshCandidatesData` |
+| `ARENA_FIGHT` | `{ targetPlayerId: string; candidateSetId?: string }` | `ArenaFightData` |
+| `ARENA_SKIP_COOLDOWN` | `{}` | `ArenaSkipCooldownData` |
+| `DUNGEON_FIGHT` | `{ chapterId?: string }` | `DungeonFightData` |
+| `MAIL_GET_BATTLE_REPLAYS` | `{ limit?: number }` | `MailBattleReplayListData` |
+| `MAIL_GET_BATTLE_REPLAY` | `{ replayId: string }` | `MailBattleReplayData` |
+| `MAIL_SAVE_MISSION_REPLAY` | `{}` | `MailSaveMissionReplayData` |
+| `MAIL_DELETE_BATTLE_REPLAY` | `{ replayId: string }` | `MailDeleteBattleReplayData` |
+
+### 8.2 BattleResultV2
+
+Client combat playback must use `BattleResultV2`. Tavern mission settlement also returns `battleResult: BattleResultV2` directly.
+
+```typescript
+type PlayerClassId = 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D' | 'CLASS_E';
+type BattleContext = 'MISSION' | 'ARENA' | 'DUNGEON' | 'FORTRESS_ATTACK' | 'FORTRESS_DEFENSE';
+
+type BaseAttributeValues = {
+  strength: number;
+  intelligence: number;
+  agility: number;
+  constitution: number;
+  luck: number;
+};
+
+type CombatantSnapshot = {
+  id: string;
+  displayName: string;
+  level: number;
+  classId: PlayerClassId;
+  attributes: BaseAttributeValues;
+  hpMax?: number;
+  armor: number;
+  weaponDamage: { min: number; max: number };
+  honor?: number;
+  rank?: number | null;
+  avatarId?: string;
+  equipmentSummary?: {
+    weaponId?: string;
+    offHandId?: string;
+    itemPowerTotal: number;
+  };
+};
+
+type BattleHitEvent = {
+  hitIndex: number;
+  attacker: 'player' | 'enemy';
+  defender: 'player' | 'enemy';
+  attackerClassId: PlayerClassId;
+  defenderClassId: PlayerClassId;
+  rawWeaponRoll: number;
+  damage: number;
+  targetHpAfter: number;
+  wasCrit: boolean;
+  wasBlocked: boolean;
+  wasDodged: boolean;
+  armorReductionBp: number;
+  rageMultiplierBp: number;
+};
+
+type BattleActionEvent = {
+  actionIndex: number;
+  roundNumber: number;
+  attacker: 'player' | 'enemy';
+  hits: BattleHitEvent[];
+};
+
+type BattleResultV2 = {
+  schemaVersion: 2;
+  context: BattleContext;
+  seedPublicHash: string;
+  winner: 'player' | 'enemy';
+  playerWon: boolean;
+  player: {
+    id: string;
+    name: string;
+    level: number;
+    classId: PlayerClassId;
+    hpMax: number;
+    hpEnd: number;
+    avatarId?: string;
+    snapshot: CombatantSnapshot;
+  };
+  enemy: {
+    id: string;
+    name: string;
+    level: number;
+    classId: PlayerClassId;
+    hpMax: number;
+    hpEnd: number;
+    avatarId?: string;
+    snapshot: CombatantSnapshot;
+  };
+  actions: BattleActionEvent[];
+  totalActions: number;
+  totalRounds: number;
+  endedBy: 'KNOCKOUT' | 'ROUND_LIMIT';
+};
+```
+
+Playback notes:
+
+- Render one `BattleActionEvent` at a time; each action can contain multiple hits.
+- `CLASS_D` player/enemy actions have 2 hits.
+- `CLASS_E` actions can have 1 to 15 hits.
+- `damage = 0` with `wasBlocked` or `wasDodged` should show a defense event, not a normal hit.
+- `CLASS_C` hits should not show block/dodge and have `armorReductionBp = 0`.
+- Do not recompute combat from current save. Use `BattleResultV2.player/enemy.snapshot` for historical playback UI.
+
+### 8.3 Tavern Mission Settlement
+
+`COMPLETE_MISSION` and `SKIP_MISSION` return `CompleteMissionData`.
+
+```typescript
+type CompleteMissionData = {
+  result: 'SUCCESS' | 'FAILED' | 'ALREADY_SETTLED';
+  missionId: string;
+  offerSetId: string;
+  battleResult: BattleResultV2;
+  canSaveReplay: boolean;
+  replayId: string | null;
+  rewardGranted: boolean;
+  grantedReward: GrantedReward;
+  playerDelta: PlayerDelta;
+  nextMissionOffers: MissionOffer[];
+  tavern: TavernSummaryView;
+};
+```
+
+Client behavior:
+
+- Use `battleResult` directly as `BattleResultV2`.
+- Show "save replay" for tavern missions when `canSaveReplay === true`.
+- Call `MAIL_SAVE_MISSION_REPLAY` after the user clicks save.
+- Repeated `COMPLETE_MISSION` / `SKIP_MISSION` can return `ALREADY_SETTLED`; do not grant rewards client-side.
+
+### 8.4 Arena APIs
+
+```typescript
+type ArenaOpponentPreview = {
+  candidateId: string;
+  playerId: string;
+  displayName: string;
+  avatarId?: string;
+  level: number;
+  classId: PlayerClassId;
+  raceId?: RaceId;
+  honor: number;
+  rank: number;
+  guildName?: string;
+  attributes: BaseAttributeValues;
+  combatPreview: {
+    hp: number;
+    armor: number;
+    damageMin: number;
+    damageMax: number;
+    critChanceBp: number;
+    blockChanceBp?: number;
+    dodgeChanceBp?: number;
+  };
+};
+
+type ArenaState = {
+  status: 'UNINITIALIZED' | 'DISABLED' | 'ACTIVE';
+  dailyWins: number;
+  honor?: number;
+  rank?: number | null;
+  dailyXpWins?: number;
+  maxDailyXpWins?: number;
+  fightsToday?: number;
+  lastDailyResetDate: string;
+  cooldownEndTime: number | null;
+  candidateSetId?: string | null;
+  candidates?: ArenaOpponentPreview[];
+};
+
+type ArenaGetInfoData = {
+  arena: ArenaState;
+  playerSummary: {
+    honor: number;
+    rank: number | null;
+    dailyXpWins: number;
+    maxDailyXpWins: number;
+    cooldownRemainingMs: number;
+  };
+};
+
+type ArenaRefreshCandidatesData = {
+  candidateSetId: string | null;
+  candidates: ArenaOpponentPreview[];
+};
+
+type ArenaFightData = {
+  result: 'WIN' | 'LOSE';
+  battleResult: BattleResultV2;
+  replayId: string;
+  honorDelta: number;
+  honorBefore: number;
+  honorAfter: number;
+  rankBefore: number | null;
+  rankAfter: number | null;
+  rankDelta: number | null;
+  grantedReward: { xp: number; copper: number };
+  dailyXpWinsAfter: number;
+  cooldownEndTime: number | null;
+  nextCandidates: ArenaOpponentPreview[];
+};
+
+type ArenaSkipCooldownData = {
+  cooldownEndTime: null;
+  spent: 'hourglasses' | 'tokens';
+};
+```
+
+Arena client flow:
+
+1. Call `ARENA_GET_INFO` when opening the arena page.
+2. Use `arena.candidates` if present; otherwise call `ARENA_REFRESH_CANDIDATES`.
+3. On fight, send the selected `targetPlayerId` and current `candidateSetId`.
+4. If success, play `data.battleResult`, show `honorDelta`, `rankDelta`, rewards, and store/open `data.replayId`.
+5. If `ARENA_COOLDOWN_ACTIVE`, show cooldown UI and optionally call `ARENA_SKIP_COOLDOWN`.
+
+Hall of Fame / 英雄谱 is intentionally out of scope for this server handoff. Do not implement real server-backed list/search/detail flows until new action contracts are added.
+
+Arena errors:
+
+| ErrorCode | Meaning |
+| :--- | :--- |
+| `ARENA_COOLDOWN_ACTIVE` | fight attempted while cooldown is active |
+| `ARENA_TARGET_NOT_FOUND` | target missing or candidate set expired |
+| `ARENA_SELF_TARGET` | target is current player |
+| `ARENA_DISABLED` | arena system disabled |
+| `INSUFFICIENT_PREMIUM_RESOURCE` | no hourglass/token to skip cooldown |
+
+### 8.5 Dungeon API
+
+```typescript
+type DungeonFightData = {
+  result: 'WIN' | 'LOSE';
+  chapterId: string;
+  bossId: string;
+  progressAfter: number;
+  battleResult: BattleResultV2;
+  replayId: string;
+  grantedReward: { xp: number; copper: number };
+};
+```
+
+Client behavior:
+
+- `chapterId` is optional. If omitted, server uses the first unlocked chapter it finds.
+- Victory advances `progressAfter` and grants reward.
+- Defeat still returns `battleResult` and `replayId`, but rewards are zero.
+- Dungeon replays are auto-saved to mailbox.
+
+### 8.6 Mail Battle Replay APIs
+
+```typescript
+type BattleReplayRecord = {
+  replayId: string;
+  ownerPlayerId: string;
+  context: BattleContext;
+  createdAt: number;
+  expiresAt?: number | null;
+  isRead: boolean;
+  isSavedByPlayer?: boolean;
+  relatedPlayerId?: string | null;
+  sourceId?: string | null;
+  title: string;
+  opponentName: string;
+  preview: {
+    type: 'PLAYER' | 'DUNGEON' | 'QUEST';
+    result: 'WIN' | 'LOSE';
+    playerName: string;
+    enemyName: string;
+    playerAvatarId?: string;
+    enemyAvatarId?: string;
+    enemyLevel: number;
+  };
+  battleResult: BattleResultV2;
+};
+
+type BattleReplayListItem = Omit<BattleReplayRecord, 'battleResult'>;
+
+type MailBattleReplayListData = {
+  replays: BattleReplayListItem[];
+};
+
+type MailBattleReplayData = {
+  replay: BattleReplayRecord;
+};
+
+type MailSaveMissionReplayData = {
+  replay: BattleReplayRecord;
+  alreadySaved: boolean;
+};
+
+type MailDeleteBattleReplayData = {
+  deleted: true;
+  replayId: string;
+};
+```
+
+Replay storage rules:
+
+- `ARENA_FIGHT`: automatically creates `BattleReplayRecord`.
+- `DUNGEON_FIGHT`: automatically creates `BattleReplayRecord`.
+- Tavern mission settlement: does not auto-save. Use `MAIL_SAVE_MISSION_REPLAY`.
+- `MAIL_GET_BATTLE_REPLAYS` intentionally omits `battleResult` for list performance.
+- Use `MAIL_GET_BATTLE_REPLAY` before opening playback from mailbox.
+
+Replay errors:
+
+| ErrorCode | Meaning |
+| :--- | :--- |
+| `BATTLE_REPLAY_NOT_FOUND` | replay does not exist or belongs to another player |
+| `BATTLE_REPLAY_READ_FAILED` | backend failed to read replay storage |
+| `BATTLE_REPLAY_WRITE_FAILED` | backend failed to save/delete replay |
+| `MISSION_REPLAY_NOT_AVAILABLE` | no latest tavern settlement replay can be saved |
+
+### 8.7 cURL Examples
+
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"ARENA_GET_INFO","payload":{}}'
+```
+
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"ARENA_FIGHT","payload":{"targetPlayerId":"bot_arena_set_x_0","candidateSetId":"arena_set_x"}}'
+```
+
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"MAIL_GET_BATTLE_REPLAYS","payload":{"limit":50}}'
+```
+
+```bash
+curl -X POST http://localhost:3001/api/action/ \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"MAIL_SAVE_MISSION_REPLAY","payload":{}}'
+```
+
+*Last Updated: 2026-05-11*

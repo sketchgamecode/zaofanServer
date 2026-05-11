@@ -52,6 +52,31 @@ CREATE TABLE IF NOT EXISTS player_saves (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── 3b. battle_replays 表（独立战斗回放归档，避免 GameState 膨胀）────────────
+CREATE TABLE IF NOT EXISTS battle_replays (
+  replay_id          TEXT PRIMARY KEY,
+  owner_player_id    UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  context            TEXT NOT NULL CHECK (context IN ('MISSION', 'ARENA', 'DUNGEON', 'FORTRESS_ATTACK', 'FORTRESS_DEFENSE')),
+  created_at_ms      BIGINT NOT NULL,
+  expires_at_ms      BIGINT,
+  is_read            BOOLEAN NOT NULL DEFAULT FALSE,
+  is_saved_by_player BOOLEAN NOT NULL DEFAULT FALSE,
+  related_player_id  TEXT,
+  source_id          TEXT,
+  title              TEXT NOT NULL,
+  opponent_name      TEXT NOT NULL,
+  preview            JSONB NOT NULL,
+  battle_result      JSONB NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS battle_replays_owner_created_idx
+  ON battle_replays (owner_player_id, created_at_ms DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS battle_replays_owner_source_idx
+  ON battle_replays (owner_player_id, context, source_id)
+  WHERE source_id IS NOT NULL;
+
 -- ── 4. admin_actions 表（后台操作审计日志）──────────────────────────────────
 CREATE TABLE IF NOT EXISTS admin_actions (
   id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -70,6 +95,7 @@ CREATE TABLE IF NOT EXISTS admin_actions (
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE player_resources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE player_saves ENABLE ROW LEVEL SECURITY;
+ALTER TABLE battle_replays ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_actions ENABLE ROW LEVEL SECURITY;
 
 -- profiles：玩家可以读写自己的 profile
@@ -79,6 +105,9 @@ CREATE POLICY "profile_self_access" ON profiles
 -- player_saves：玩家可以读写自己的存档
 CREATE POLICY "save_self_access" ON player_saves
   FOR ALL USING (auth.uid() = player_id);
+
+CREATE POLICY "battle_replay_self_access" ON battle_replays
+  FOR ALL USING (auth.uid() = owner_player_id);
 
 -- player_resources：玩家只能读自己的资源（写必须走服务端 service_role）
 CREATE POLICY "resources_self_read" ON player_resources
@@ -91,7 +120,7 @@ CREATE POLICY "resources_self_read" ON player_resources
 DO $$
 BEGIN
   RAISE NOTICE '✅ 大宋造反模拟器数据库初始化完成';
-  RAISE NOTICE '   表已创建: profiles, player_resources, player_saves, admin_actions';
+  RAISE NOTICE '   表已创建: profiles, player_resources, player_saves, battle_replays, admin_actions';
   RAISE NOTICE '   触发器已创建: 新用户自动建 profile';
   RAISE NOTICE '   RLS 已启用: 玩家数据隔离保护';
 END $$;

@@ -74,8 +74,15 @@ export function createInitialGameState(input: { now: number; playerId?: string }
     arena: {
       status: 'UNINITIALIZED',
       dailyWins: 0,
+      honor: 1000,
+      rank: null,
+      dailyXpWins: 0,
+      maxDailyXpWins: 10,
+      fightsToday: 0,
       lastDailyResetDate: today,
       cooldownEndTime: null,
+      candidateSetId: null,
+      candidates: [],
     },
     dungeon: {
       status: 'UNINITIALIZED',

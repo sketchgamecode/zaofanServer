@@ -10,6 +10,9 @@ import { equipItem, unequipItem } from './inventory.js';
 import { completeMission, skipMission, startMission } from './missions.js';
 import { getTavernInfo, tavernDrink, generateMissions } from './tavern.js';
 import { refreshBlackMarket, buyAndEquipItem, buyItem, sellItem } from './blackMarket.js';
+import { arenaFight, arenaGetInfo, arenaRefreshCandidates, arenaSkipCooldown } from './arena.js';
+import { mailDeleteBattleReplay, mailGetBattleReplay, mailGetBattleReplays, mailSaveMissionReplay } from './mail.js';
+import { dungeonFight } from './dungeon.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
@@ -17,11 +20,8 @@ const DISABLED_ACTIONS: Record<string, string> = {
   // 旧版黑市 API（已废弃，保留以防客户端未升级时报 UNKNOWN_ACTION）
   BLACK_MARKET_REFRESH: 'blackMarket',
   BLACK_MARKET_BUY: 'blackMarket',
-  ARENA_FIGHT: 'arena',
-  ARENA_SKIP_COOLDOWN: 'arena',
   GUARD_WORK_START: 'guardWork',
   GUARD_WORK_CLAIM: 'guardWork',
-  DUNGEON_FIGHT: 'dungeon',
   DEBUG_CHEAT: 'debugCheat',
 };
 
@@ -43,6 +43,15 @@ const ACTION_HANDLERS: Record<string, Handler> = {
   'BUY_AND_EQUIP_ITEM': buyAndEquipItem,
   'BUY_ITEM': buyItem,
   'SELL_ITEM': sellItem,
+  'ARENA_GET_INFO': arenaGetInfo,
+  'ARENA_REFRESH_CANDIDATES': arenaRefreshCandidates,
+  'ARENA_FIGHT': arenaFight,
+  'ARENA_SKIP_COOLDOWN': arenaSkipCooldown,
+  'MAIL_GET_BATTLE_REPLAYS': mailGetBattleReplays,
+  'MAIL_GET_BATTLE_REPLAY': mailGetBattleReplay,
+  'MAIL_SAVE_MISSION_REPLAY': mailSaveMissionReplay,
+  'MAIL_DELETE_BATTLE_REPLAY': mailDeleteBattleReplay,
+  'DUNGEON_FIGHT': dungeonFight,
 };
 
 export async function dispatchAction(

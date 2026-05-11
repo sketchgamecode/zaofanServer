@@ -1,17 +1,12 @@
 /**
- * wipeAllSaves.ts — 清空所有玩家存档数据
+ * wipeAllSaves.ts - destructive full-player wipe for clean-wipe upgrades.
  *
- * 用法：
- *   npx tsx src/scripts/wipeAllSaves.ts
+ * Usage:
+ *   npm run wipe:all
  *   npm run wipe:saves
  *
- * 功能：
- *   1. 删除 player_saves 表所有行（玩家游戏存档）
- *   2. 可选：重置 profiles 表的 last_login_at（保留账号但清除登录痕迹）
- *
- * 安全措施：
- *   - 生产环境下必须设置 FORCE_WIPE=true 环境变量才能执行
- *   - 执行前会打印将要删除的记录数并等待确认（除非设置 CI=true 跳过确认）
+ * This deletes all player-owned server data and Supabase Auth users.
+ * It intentionally does not preserve old accounts, saves, replays, or resources.
  */
 
 import 'dotenv/config';
@@ -21,13 +16,12 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !serviceRoleKey) {
-  console.error('❌ 缺少 SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY 环境变量');
+  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
   process.exit(1);
 }
 
-// 生产环境安全检查
 if (process.env.NODE_ENV === 'production' && process.env.FORCE_WIPE !== 'true') {
-  console.error('❌ 生产环境下需设置 FORCE_WIPE=true 才能执行清档操作');
+  console.error('Refusing production wipe without FORCE_WIPE=true.');
   process.exit(1);
 }
 
@@ -35,66 +29,139 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+type WipeTableSpec = {
+  table: string;
+  keyColumn: string;
+  impossibleValue: string;
+};
+
+const PUBLIC_TABLES: WipeTableSpec[] = [
+  { table: 'admin_actions', keyColumn: 'id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
+  { table: 'battle_replays', keyColumn: 'replay_id', impossibleValue: '__impossible_replay_id__' },
+  { table: 'player_saves', keyColumn: 'player_id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
+  { table: 'player_resources', keyColumn: 'player_id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
+  { table: 'profiles', keyColumn: 'id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
+];
+
 async function countRecords(table: string): Promise<number> {
   const { count, error } = await supabase
     .from(table)
     .select('*', { count: 'exact', head: true });
+
   if (error) {
-    console.warn(`⚠️  无法查询 ${table} 记录数: ${error.message}`);
+    console.warn(`Could not count ${table}: ${error.message}`);
     return -1;
   }
   return count ?? 0;
 }
 
-async function wipeTable(table: string): Promise<number> {
-  // Supabase 的 delete 需要 where 条件，用 neq 一个不可能的值来删除所有行
+async function countAuthUsers(): Promise<number> {
+  const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1 });
+  if (error) {
+    console.warn(`Could not count auth users: ${error.message}`);
+    return -1;
+  }
+  return data.total ?? data.users.length;
+}
+
+async function wipeTable(spec: WipeTableSpec): Promise<number> {
   const { data, error } = await supabase
-    .from(table)
+    .from(spec.table)
     .delete()
-    .neq('player_id', '__impossible_id__')
-    .select('player_id');
+    .neq(spec.keyColumn, spec.impossibleValue)
+    .select(spec.keyColumn);
 
   if (error) {
-    console.error(`❌ 清空 ${table} 失败: ${error.message}`);
-    return 0;
+    if (error.message.includes(`Could not find the table 'public.${spec.table}'`)) {
+      console.warn(`Skipping missing table ${spec.table}. Apply database schema before using related features.`);
+      return 0;
+    }
+    throw new Error(`Failed to wipe ${spec.table}: ${error.message}`);
   }
+
   return data?.length ?? 0;
 }
 
+async function listAllAuthUserIds(): Promise<string[]> {
+  const ids: string[] = [];
+  const perPage = 1000;
+
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      throw new Error(`Failed to list auth users: ${error.message}`);
+    }
+
+    ids.push(...data.users.map((user) => user.id));
+    if (data.users.length < perPage) break;
+  }
+
+  return ids;
+}
+
+async function deleteAuthUsers(): Promise<number> {
+  const userIds = await listAllAuthUserIds();
+  let deleted = 0;
+
+  for (const userId of userIds) {
+    const { error } = await supabase.auth.admin.deleteUser(userId);
+    if (error) {
+      throw new Error(`Failed to delete auth user ${userId}: ${error.message}`);
+    }
+    deleted += 1;
+  }
+
+  return deleted;
+}
+
+async function waitForConfirmation(): Promise<void> {
+  if (process.env.CI === 'true' || process.env.CONFIRM_WIPE === 'true') return;
+
+  console.log('');
+  console.log('This will permanently delete all Supabase Auth users and all player data.');
+  console.log('Type WIPE_ALL to continue:');
+
+  const answer = await new Promise<string>((resolve) => {
+    process.stdin.once('data', (data) => resolve(data.toString().trim()));
+  });
+
+  if (answer !== 'WIPE_ALL') {
+    throw new Error('Wipe cancelled.');
+  }
+}
+
 async function run(): Promise<void> {
-  console.log('🧹 ZaoFan 全服清档工具');
-  console.log(`📍 目标: ${supabaseUrl}`);
-  console.log('─'.repeat(50));
+  console.log('ZaoFan full clean-wipe tool');
+  console.log(`Target: ${supabaseUrl}`);
+  console.log('-'.repeat(50));
 
-  // 1. 统计当前数据量
-  const saveCount = await countRecords('player_saves');
-  console.log(`📊 player_saves 表: ${saveCount} 条记录`);
+  const counts = await Promise.all(PUBLIC_TABLES.map(async (spec) => [spec.table, await countRecords(spec.table)] as const));
+  const authUserCount = await countAuthUsers();
 
-  if (saveCount === 0) {
-    console.log('✅ 无需清理，player_saves 已为空');
-    return;
+  for (const [table, count] of counts) {
+    console.log(`${table}: ${count}`);
+  }
+  console.log(`auth.users: ${authUserCount}`);
+
+  await waitForConfirmation();
+
+  console.log('');
+  console.log('Wiping public player data...');
+  for (const spec of PUBLIC_TABLES) {
+    const deleted = await wipeTable(spec);
+    console.log(`Deleted ${deleted} from ${spec.table}`);
   }
 
-  // 2. 非 CI 环境下等待确认
-  const isCI = process.env.CI === 'true';
-  if (!isCI) {
-    console.log('\n⚠️  即将删除以上所有数据，此操作不可逆！');
-    console.log('   按 Enter 继续，或 Ctrl+C 取消...');
-    await new Promise<void>((resolve) => {
-      process.stdin.once('data', () => resolve());
-    });
-  }
+  console.log('');
+  console.log('Deleting Supabase Auth users...');
+  const deletedAuthUsers = await deleteAuthUsers();
+  console.log(`Deleted ${deletedAuthUsers} auth users`);
 
-  // 3. 执行清空
-  console.log('\n🔥 正在清空 player_saves ...');
-  const deletedSaves = await wipeTable('player_saves');
-  console.log(`   ✅ 已删除 ${deletedSaves} 条存档`);
-
-  console.log('\n─'.repeat(50));
-  console.log('🎉 清档完成！所有玩家数据已销毁。');
+  console.log('');
+  console.log('Full clean-wipe complete.');
 }
 
 run().catch((err) => {
-  console.error('💥 脚本执行失败:', err);
+  console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 });

@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "smoke:core": "node dist/scripts/smokeCore.js",
+    "wipe:all": "tsx src/scripts/wipeAllSaves.ts",
     "wipe:saves": "tsx src/scripts/wipeAllSaves.ts"
   },
   "dependencies": {

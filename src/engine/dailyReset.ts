@@ -21,6 +21,8 @@ export function applyDailyResetIfNeeded(state: GameState, now: number): boolean 
 
   state.arena.lastDailyResetDate = today;
   state.arena.dailyWins = 0;
+  state.arena.dailyXpWins = 0;
+  state.arena.fightsToday = 0;
   state.dungeon.lastDailyResetDate = today;
   state.dungeon.dailyAttemptsUsed = 0;
 

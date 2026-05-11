@@ -1,67 +1,22 @@
 import { MAX_LEVEL, XP_TABLE } from '../data/xpTable.js';
-import { createSeededRandom } from '../lib/rng.js';
 import { getGameDateString } from '../lib/time.js';
 import type {
-  AttributeState,
   BaseAttributeValues,
-  BattleResult,
+  BattleResultV2,
   EquipmentItem,
-  EnemySnapshot,
   GameState,
   PlayerClassId,
   PlayerCombatSnapshot,
+  EnemySnapshot,
 } from '../types/gameState.js';
+import { CLASS_CONFIG } from './combatConfig.js';
+import { simulateBattleV2 } from './combatSimulator.js';
 
-export const CLASS_CONFIG: Record<PlayerClassId, {
-  name: string;
-  mainStat: 'strength' | 'agility' | 'intelligence';
-  hpMultiplier: number;
-  armorCap: number;
-  weaponFactor: number;
-  /** 格挡率（万分比），0 表示无格挡 */
-  blockChanceBp: number;
-  /** 闪避率（万分比），0 表示无闪避 */
-  dodgeChanceBp: number;
-  /** 攻击是否绕过护甲减伤且必中 */
-  bypassArmor: boolean;
-  /** 双持：每回合固定两次攻击（杀手） */
-  dualWield: boolean;
-  /** 嗜血连击概率（万分比），0 表示无连击（绿林好汉 50% = 5000bp） */
-  frenzyChanceBp: number;
-  /** 护甲减伤是否减半（绿林好汉） */
-  armorHalved: boolean;
-}> = {
-  CLASS_A: {
-    name: '猛将', mainStat: 'strength', hpMultiplier: 5, armorCap: 50,
-    weaponFactor: 2.0, blockChanceBp: 2500, dodgeChanceBp: 0,
-    bypassArmor: false, dualWield: false, frenzyChanceBp: 0, armorHalved: false,
-  },
-  CLASS_B: {
-    name: '游侠', mainStat: 'agility', hpMultiplier: 4, armorCap: 25,
-    weaponFactor: 2.5, blockChanceBp: 0, dodgeChanceBp: 5000,
-    bypassArmor: false, dualWield: false, frenzyChanceBp: 0, armorHalved: false,
-  },
-  CLASS_C: {
-    name: '谋士', mainStat: 'intelligence', hpMultiplier: 2, armorCap: 10,
-    weaponFactor: 4.5, blockChanceBp: 0, dodgeChanceBp: 0,
-    bypassArmor: true, dualWield: false, frenzyChanceBp: 0, armorHalved: false,
-  },
-  CLASS_D: {
-    name: '杀手', mainStat: 'agility', hpMultiplier: 4, armorCap: 25,
-    weaponFactor: 2.0, blockChanceBp: 0, dodgeChanceBp: 0,
-    bypassArmor: false, dualWield: true, frenzyChanceBp: 0, armorHalved: false,
-  },
-  CLASS_E: {
-    name: '绿林好汉', mainStat: 'strength', hpMultiplier: 4, armorCap: 25,
-    weaponFactor: 2.0, blockChanceBp: 0, dodgeChanceBp: 0,
-    bypassArmor: false, dualWield: false, frenzyChanceBp: 5000, armorHalved: true,
-  },
-};
+export { CLASS_CONFIG } from './combatConfig.js';
 
 export const MathCore = {
-  /** MaxHP = Constitution × ClassMultiplier × (Level + 1) */
   getMaxHP: (constitution: number, level: number, classId: PlayerClassId): number =>
-    constitution * CLASS_CONFIG[classId].hpMultiplier * (level + 1),
+    Math.ceil(constitution * CLASS_CONFIG[classId].hpMultiplier * (level + 1)),
 
   getCritChance: (luck: number, enemyLevel: number): number =>
     Math.min(0.5, ((luck * 2.5) / (Math.max(1, enemyLevel) * 100))),
@@ -79,10 +34,7 @@ export function checkLevelUp(currentLevel: number, currentExp: number): {
 
   while (level < MAX_LEVEL) {
     const required = XP_TABLE[level];
-    if (required === undefined || exp < required) {
-      break;
-    }
-
+    if (required === undefined || exp < required) break;
     exp -= required;
     level += 1;
     levelsGained += 1;
@@ -127,107 +79,22 @@ export interface BattleSide {
   level: number;
 }
 
-function battleSideFromPlayer(snapshot: PlayerCombatSnapshot): BattleSide {
-  return {
-    hp: snapshot.combatStats.hp,
-    damageMin: snapshot.combatStats.damageMin,
-    damageMax: snapshot.combatStats.damageMax,
-    critChanceBp: snapshot.combatStats.critChanceBp,
-    dodgeChanceBp: snapshot.combatStats.dodgeChanceBp,
-    armor: snapshot.combatStats.armor,
-    level: snapshot.level,
-  };
-}
-
-function battleSideFromEnemy(snapshot: EnemySnapshot): BattleSide {
-  return {
-    hp: snapshot.combatStats.hp,
-    damageMin: snapshot.combatStats.damageMin,
-    damageMax: snapshot.combatStats.damageMax,
-    critChanceBp: snapshot.combatStats.critChanceBp,
-    dodgeChanceBp: snapshot.combatStats.dodgeChanceBp,
-    armor: snapshot.combatStats.armor,
-    level: snapshot.level,
-  };
-}
-
-function rollDamage(attacker: BattleSide, defender: BattleSide, rng: ReturnType<typeof createSeededRandom>): { damage: number; wasCrit: boolean; dodged: boolean } {
-  const dodged = defender.dodgeChanceBp !== undefined && rng.chanceBp(defender.dodgeChanceBp);
-  if (dodged) {
-    return { damage: 0, wasCrit: false, dodged: true };
-  }
-
-  const rawDamage = rng.int(attacker.damageMin, attacker.damageMax);
-  const wasCrit = rng.chanceBp(attacker.critChanceBp);
-  const critDamage = wasCrit ? Math.floor(rawDamage * 1.75) : rawDamage;
-  const mitigated = Math.max(1, Math.floor(critDamage - defender.armor * 0.25));
-  return { damage: mitigated, wasCrit, dodged: false };
-}
-
 export function serverSimulateBattle(input: {
   player: PlayerCombatSnapshot;
   enemy: EnemySnapshot;
   seed: string;
-}): BattleResult {
-  const rng = createSeededRandom(input.seed);
-  const player = battleSideFromPlayer(input.player);
-  const enemy = battleSideFromEnemy(input.enemy);
-  let playerHp = player.hp;
-  let enemyHp = enemy.hp;
-  const rounds: BattleResult['rounds'] = [];
-
-  for (let roundIndex = 0; roundIndex < 200; roundIndex += 1) {
-    const playerRoll = rollDamage(player, enemy, rng);
-    enemyHp = Math.max(0, enemyHp - playerRoll.damage);
-    rounds.push({
-      attacker: 'player',
-      damage: playerRoll.damage,
-      targetHpAfter: enemyHp,
-      wasCrit: playerRoll.wasCrit || undefined,
-    });
-    if (enemyHp <= 0) {
-      return {
-        playerWon: true,
-        rounds,
-        playerHpEnd: playerHp,
-        enemyHpEnd: enemyHp,
-        totalRounds: rounds.length,
-      };
-    }
-
-    const enemyRoll = rollDamage(enemy, player, rng);
-    playerHp = Math.max(0, playerHp - enemyRoll.damage);
-    rounds.push({
-      attacker: 'enemy',
-      damage: enemyRoll.damage,
-      targetHpAfter: playerHp,
-      wasCrit: enemyRoll.wasCrit || undefined,
-    });
-    if (playerHp <= 0) {
-      return {
-        playerWon: false,
-        rounds,
-        playerHpEnd: playerHp,
-        enemyHpEnd: enemyHp,
-        totalRounds: rounds.length,
-      };
-    }
-  }
-
-  return {
-    playerWon: playerHp >= enemyHp,
-    rounds,
-    playerHpEnd: playerHp,
-    enemyHpEnd: enemyHp,
-    totalRounds: rounds.length,
-  };
+}): BattleResultV2 {
+  return simulateBattleV2({
+    player: input.player,
+    enemy: input.enemy,
+    seed: input.seed,
+    context: 'MISSION',
+    firstAttacker: 'player',
+  });
 }
 
 function getWeaponAverageDamage(item: EquipmentItem | null, level: number): number {
-  if (!item?.weaponDamage) {
-    return level * 3;
-  }
-
+  if (!item?.weaponDamage) return level * 3;
   return (item.weaponDamage.min + item.weaponDamage.max) / 2;
 }
 
@@ -237,17 +104,17 @@ export function buildPlayerBattleSide(state: GameState): BattleSide {
   const mainAttr = attrs[classConf.mainStat];
   const totalArmor = Object.values(state.equipment.equipped).reduce((sum, item) => sum + (item?.armor ?? 0), 0);
   const weaponAverageDamage = getWeaponAverageDamage(state.equipment.equipped.weapon, state.player.level);
-  const damageMin = Math.floor(weaponAverageDamage * 0.8 * (1 + mainAttr / 10));
-  const damageMax = Math.floor(weaponAverageDamage * 1.2 * (1 + mainAttr / 10));
+  const damageMin = Math.max(1, Math.floor(weaponAverageDamage * 0.8 * classConf.weaponFactor * (1 + mainAttr / 10)));
+  const damageMax = Math.max(damageMin + 1, Math.floor(weaponAverageDamage * 1.2 * classConf.weaponFactor * (1 + mainAttr / 10)));
 
   return {
     hp: MathCore.getMaxHP(attrs.constitution, state.player.level, state.player.classId),
     damageMin,
     damageMax,
     critChanceBp: Math.floor(MathCore.getCritChance(attrs.luck, state.player.level) * 10000),
-    dodgeChanceBp: Math.min(2500, attrs.agility * 15),
-    blockChanceBp: undefined,
-    armor: Math.min(totalArmor, classConf.armorCap * state.player.level),
+    dodgeChanceBp: classConf.dodgeChanceBp || undefined,
+    blockChanceBp: classConf.blockChanceBp || undefined,
+    armor: totalArmor,
     level: state.player.level,
   };
 }
