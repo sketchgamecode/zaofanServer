@@ -68,4 +68,39 @@ router.post('/players/:id/grant', async (req: Request, res: Response): Promise<v
   });
 });
 
+/**
+ * DELETE /api/admin/wipe-all-saves
+ *
+ * 清空所有玩家存档。可被 CI/CD webhook 自动调用。
+ * 需要 Admin 权限认证。
+ */
+router.delete('/wipe-all-saves', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('player_saves')
+      .delete()
+      .neq('player_id', '__impossible_id__')
+      .select('player_id');
+
+    if (error) {
+      res.status(500).json({ error: '清档失败', detail: error.message });
+      return;
+    }
+
+    const deletedCount = data?.length ?? 0;
+    console.log(`[ADMIN] 🧹 wipe-all-saves: 已删除 ${deletedCount} 条存档`);
+
+    res.json({
+      ok: true,
+      deletedCount,
+      message: `已成功删除 ${deletedCount} 条玩家存档`,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: '清档失败',
+      detail: err instanceof Error ? err.message : 'Unknown error',
+    });
+  }
+});
+
 export default router;

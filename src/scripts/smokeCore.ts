@@ -28,7 +28,7 @@ async function run(): Promise<void> {
   const now = Date.now();
   const state = createInitialGameState({ now, playerId: 'smoke-user' });
 
-  assert(state.meta.schemaVersion === 1, 'schema version should be 1');
+  assert(state.meta.schemaVersion === 2, 'schema version should be 2');
   assert(state.tavern.thirstSecRemaining === 6000, 'initial thirst should be 6000 sec');
 
   const before = captureResourceSnapshot(state);
@@ -65,6 +65,7 @@ async function run(): Promise<void> {
   assert(disabled.ok && disabled.data.status === 'DISABLED', 'disabled response should be stable');
 
   const characterState = createInitialGameState({ now, playerId: 'character-user' });
+  characterState.player.status = 'ACTIVE';
   characterState.resources.copper = 500;
   characterState.inventory.items.push(
     {
@@ -76,6 +77,7 @@ async function run(): Promise<void> {
       subType: 'weapon',
       weaponDamage: { min: 10, max: 16 },
       price: 30,
+      sellPrice: 7,
       bonusAttributes: { strength: 2, agility: 1 },
     },
     {
@@ -87,6 +89,7 @@ async function run(): Promise<void> {
       subType: 'none',
       armor: 8,
       price: 25,
+      sellPrice: 6,
       bonusAttributes: { constitution: 3 },
     },
   );
@@ -99,6 +102,7 @@ async function run(): Promise<void> {
     subType: 'none',
     armor: 2,
     price: 5,
+    sellPrice: 1,
     bonusAttributes: { constitution: 1 },
   };
   const characterCtx = createActionContext({ playerId: 'character-user', now, state: characterState });
@@ -142,15 +146,16 @@ async function run(): Promise<void> {
 
   const strengthBeforeUpgrade = characterState.attributes.strength;
   const copperBeforeUpgrade = characterState.resources.copper;
-  const expectedUpgradeCost = getAttributeUpgradeCost(strengthBeforeUpgrade);
+  const expectedUpgradeCost = getAttributeUpgradeCost(characterState.player.level, characterState.attributes.bought.strength);
   const upgradeResponse = upgradeAttribute(characterCtx, { attribute: 'strength' });
   const upgradeData = upgradeResponse.data;
   assert(characterState.attributes.strength === strengthBeforeUpgrade + 1, 'UPGRADE_ATTRIBUTE should increment base attribute');
   assert(characterState.resources.copper === copperBeforeUpgrade - expectedUpgradeCost, 'UPGRADE_ATTRIBUTE should spend copper using pre-upgrade cost');
-  assert(upgradeData.attributes.upgradeCosts.strength === getAttributeUpgradeCost(strengthBeforeUpgrade + 1), 'UPGRADE_ATTRIBUTE should return post-upgrade cost');
+  assert(upgradeData.attributes.upgradeCosts.strength === getAttributeUpgradeCost(characterState.player.level, characterState.attributes.bought.strength), 'UPGRADE_ATTRIBUTE should return post-upgrade cost');
   assert(upgradeData.combatPreview.damageMax >= unequipData.combatPreview.damageMax, 'UPGRADE_ATTRIBUTE should affect combatPreview');
 
   const noCopperState = createInitialGameState({ now, playerId: 'no-copper-user' });
+  noCopperState.player.status = 'ACTIVE';
   noCopperState.resources.copper = 0;
   const noCopperCtx = createActionContext({ playerId: 'no-copper-user', now, state: noCopperState });
   let noCopperRejected = false;
@@ -392,6 +397,7 @@ async function run(): Promise<void> {
   assert(mountSnapshotState.tavern.activeMission!.actualDurationSec === activeDurationBefore, 'mount changes after START_MISSION must not affect active mission duration');
 
   const snapshotIsolationState = createInitialGameState({ now, playerId: 'snapshot-isolation-user' });
+  snapshotIsolationState.player.status = 'ACTIVE';
   snapshotIsolationState.resources.copper = 500;
   snapshotIsolationState.inventory.items.push({
     id: 'eq_snapshot_weapon',
@@ -402,6 +408,7 @@ async function run(): Promise<void> {
     subType: 'weapon',
     weaponDamage: { min: 20, max: 28 },
     price: 50,
+    sellPrice: 12,
     bonusAttributes: { strength: 4 },
   });
   const snapshotIsolationCtx = createActionContext({ playerId: 'snapshot-isolation-user', now, state: snapshotIsolationState });

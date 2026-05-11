@@ -27,7 +27,7 @@ import {
   generateWeaponShopItems,
   generateBlackMarketItems,
 } from './equipmentGenerator.js';
-import { refreshBlackMarket, buyAndEquipItem } from './blackMarket.js';
+import { refreshBlackMarket, buyAndEquipItem, buyItem, sellItem } from './blackMarket.js';
 import type { ActionContext } from './actionContext.js';
 import type { GameState, EquipmentItem } from '../types/gameState.js';
 import type { SeededRandom } from '../lib/rng.js';
@@ -57,7 +57,7 @@ function makeState(overrides: Partial<GameState['resources']> = {}): GameState {
   const now = Date.now();
   return {
     meta: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       createdAt: now,
       updatedAt: now,
       lastDailyResetDate: '2026-01-01',
@@ -67,6 +67,8 @@ function makeState(overrides: Partial<GameState['resources']> = {}): GameState {
       level: 10,
       exp: 0,
       classId: 'CLASS_A',
+      raceId: 'RACE_01',
+      status: 'ACTIVE',
     },
     resources: {
       copper: 10_000,
@@ -82,6 +84,7 @@ function makeState(overrides: Partial<GameState['resources']> = {}): GameState {
       constitution: 10,
       luck: 10,
       unspentPoints: 0,
+      bought: { strength: 0, intelligence: 0, agility: 0, constitution: 0, luck: 0 },
     },
     inventory: { items: [], capacity: 60 },
     equipment: {
@@ -483,5 +486,81 @@ describe('buyAndEquipItem() — 黑市为空', () => {
 
     const ctx = makeCtx(state);
     expect(() => buyAndEquipItem(ctx, { itemId: 'any-id' })).toThrowError();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. buyItem — 购买到背包
+// ---------------------------------------------------------------------------
+describe('buyItem()', () => {
+  it('应成功购买到背包，并扣除铜钱', () => {
+    const state = makeState({ copper: 1000 });
+    const item = generateEquipment({ playerLevel: 10, slot: 'head', rarity: 0 });
+    item.price = 200;
+    state.blackMarket.items = [item];
+
+    const ctx = makeCtx(state);
+    const res = buyItem(ctx, { itemId: item.id });
+
+    expect(res.ok).toBe(true);
+    expect(state.resources.copper).toBe(800);
+    expect(state.inventory.items).toContain(item);
+    expect(state.blackMarket.items).not.toContain(item);
+    expect(ctx.dirty).toBe(true);
+  });
+
+  it('背包满时应抛出 INVENTORY_FULL', () => {
+    const state = makeState();
+    state.inventory.capacity = 30;
+    state.inventory.items = new Array(30).fill({}); // 填满
+    const item = generateEquipment({ playerLevel: 10, slot: 'head', rarity: 0 });
+    state.blackMarket.items = [item];
+
+    const ctx = makeCtx(state);
+    expect(() => buyItem(ctx, { itemId: item.id })).toThrowError(/背囊已满/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. sellItem — 出售物品
+// ---------------------------------------------------------------------------
+describe('sellItem()', () => {
+  it('从背包出售物品应增加铜钱并移除物品', () => {
+    const state = makeState({ copper: 0 });
+    const item = generateEquipment({ playerLevel: 10, slot: 'weapon', rarity: 0 });
+    item.sellPrice = 100;
+    state.inventory.items = [item];
+
+    const ctx = makeCtx(state);
+    const res = sellItem(ctx, { itemId: item.id });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.copperGained).toBe(100);
+    }
+    expect(state.resources.copper).toBe(100);
+    expect(state.inventory.items).toHaveLength(0);
+    expect(ctx.dirty).toBe(true);
+  });
+
+  it('从身上出售物品应增加铜钱并置空槽位', () => {
+    const state = makeState({ copper: 0 });
+    const item = generateEquipment({ playerLevel: 10, slot: 'weapon', rarity: 0 });
+    item.sellPrice = 250;
+    state.equipment.equipped.weapon = item;
+
+    const ctx = makeCtx(state);
+    const res = sellItem(ctx, { itemId: item.id });
+
+    expect(res.ok).toBe(true);
+    expect(state.resources.copper).toBe(250);
+    expect(state.equipment.equipped.weapon).toBeNull();
+    expect(ctx.dirty).toBe(true);
+  });
+
+  it('物品不存在时应抛出错误', () => {
+    const state = makeState();
+    const ctx = makeCtx(state);
+    expect(() => sellItem(ctx, { itemId: 'non-existent' })).toThrowError(/找不到要出售的物品/);
   });
 });

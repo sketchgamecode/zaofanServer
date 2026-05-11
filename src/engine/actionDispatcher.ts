@@ -3,12 +3,13 @@ import type { ActionContext } from './actionContext.js';
 import { buildDisabledActionResponse } from './disabledActions.js';
 import { upgradeAttribute } from './attributes.js';
 import { getPlayerInfo } from './character.js';
+import { createCharacter } from './createCharacter.js';
 import { debugResetSave } from './debugActions.js';
 import { GameError, toActionErrorResponse } from './errors.js';
 import { equipItem, unequipItem } from './inventory.js';
 import { completeMission, skipMission, startMission } from './missions.js';
-import { generateMissions, getTavernInfo, tavernDrink } from './tavern.js';
-import { refreshBlackMarket, buyAndEquipItem } from './blackMarket.js';
+import { getTavernInfo, tavernDrink, generateMissions } from './tavern.js';
+import { refreshBlackMarket, buyAndEquipItem, buyItem, sellItem } from './blackMarket.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
@@ -26,6 +27,7 @@ const DISABLED_ACTIONS: Record<string, string> = {
 
 const ACTION_HANDLERS: Record<string, Handler> = {
   'DEBUG_RESET_SAVE': debugResetSave,
+  'CREATE_CHARACTER': createCharacter,
   'PLAYER_GET_INFO': getPlayerInfo,
   'UPGRADE_ATTRIBUTE': upgradeAttribute,
   'EQUIP_ITEM': equipItem,
@@ -39,6 +41,8 @@ const ACTION_HANDLERS: Record<string, Handler> = {
   // 黑市系统
   'REFRESH_BLACKMARKET': refreshBlackMarket,
   'BUY_AND_EQUIP_ITEM': buyAndEquipItem,
+  'BUY_ITEM': buyItem,
+  'SELL_ITEM': sellItem,
 };
 
 export async function dispatchAction(

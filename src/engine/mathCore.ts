@@ -3,6 +3,7 @@ import { createSeededRandom } from '../lib/rng.js';
 import { getGameDateString } from '../lib/time.js';
 import type {
   AttributeState,
+  BaseAttributeValues,
   BattleResult,
   EquipmentItem,
   EnemySnapshot,
@@ -16,19 +17,54 @@ export const CLASS_CONFIG: Record<PlayerClassId, {
   mainStat: 'strength' | 'agility' | 'intelligence';
   hpMultiplier: number;
   armorCap: number;
+  weaponFactor: number;
+  /** 格挡率（万分比），0 表示无格挡 */
+  blockChanceBp: number;
+  /** 闪避率（万分比），0 表示无闪避 */
+  dodgeChanceBp: number;
+  /** 攻击是否绕过护甲减伤且必中 */
+  bypassArmor: boolean;
+  /** 双持：每回合固定两次攻击（杀手） */
+  dualWield: boolean;
+  /** 嗜血连击概率（万分比），0 表示无连击（绿林好汉 50% = 5000bp） */
+  frenzyChanceBp: number;
+  /** 护甲减伤是否减半（绿林好汉） */
+  armorHalved: boolean;
 }> = {
-  CLASS_A: { name: '猛将', mainStat: 'strength', hpMultiplier: 5, armorCap: 50 },
-  CLASS_B: { name: '游侠', mainStat: 'agility', hpMultiplier: 4, armorCap: 25 },
-  CLASS_C: { name: '谋士', mainStat: 'intelligence', hpMultiplier: 2, armorCap: 10 },
-  CLASS_D: { name: '刺客', mainStat: 'agility', hpMultiplier: 4, armorCap: 25 },
+  CLASS_A: {
+    name: '猛将', mainStat: 'strength', hpMultiplier: 5, armorCap: 50,
+    weaponFactor: 2.0, blockChanceBp: 2500, dodgeChanceBp: 0,
+    bypassArmor: false, dualWield: false, frenzyChanceBp: 0, armorHalved: false,
+  },
+  CLASS_B: {
+    name: '游侠', mainStat: 'agility', hpMultiplier: 4, armorCap: 25,
+    weaponFactor: 2.5, blockChanceBp: 0, dodgeChanceBp: 5000,
+    bypassArmor: false, dualWield: false, frenzyChanceBp: 0, armorHalved: false,
+  },
+  CLASS_C: {
+    name: '谋士', mainStat: 'intelligence', hpMultiplier: 2, armorCap: 10,
+    weaponFactor: 4.5, blockChanceBp: 0, dodgeChanceBp: 0,
+    bypassArmor: true, dualWield: false, frenzyChanceBp: 0, armorHalved: false,
+  },
+  CLASS_D: {
+    name: '杀手', mainStat: 'agility', hpMultiplier: 4, armorCap: 25,
+    weaponFactor: 2.0, blockChanceBp: 0, dodgeChanceBp: 0,
+    bypassArmor: false, dualWield: true, frenzyChanceBp: 0, armorHalved: false,
+  },
+  CLASS_E: {
+    name: '绿林好汉', mainStat: 'strength', hpMultiplier: 4, armorCap: 25,
+    weaponFactor: 2.0, blockChanceBp: 0, dodgeChanceBp: 0,
+    bypassArmor: false, dualWield: false, frenzyChanceBp: 5000, armorHalved: true,
+  },
 };
 
 export const MathCore = {
+  /** MaxHP = Constitution × ClassMultiplier × (Level + 1) */
   getMaxHP: (constitution: number, level: number, classId: PlayerClassId): number =>
-    constitution * level * CLASS_CONFIG[classId].hpMultiplier,
+    constitution * CLASS_CONFIG[classId].hpMultiplier * (level + 1),
 
   getCritChance: (luck: number, enemyLevel: number): number =>
-    Math.min(0.5, ((luck * 5) / (Math.max(1, enemyLevel) * 2)) / 100),
+    Math.min(0.5, ((luck * 2.5) / (Math.max(1, enemyLevel) * 100))),
 };
 
 export function checkLevelUp(currentLevel: number, currentExp: number): {
@@ -55,8 +91,14 @@ export function checkLevelUp(currentLevel: number, currentExp: number): {
   return { newLevel: level, newExp: exp, didLevelUp: levelsGained > 0, levelsGained };
 }
 
-export function getTotalAttributes(state: GameState): AttributeState {
-  const total: AttributeState = { ...state.attributes };
+export function getTotalAttributes(state: GameState): BaseAttributeValues {
+  const total: BaseAttributeValues = {
+    strength: state.attributes.strength,
+    intelligence: state.attributes.intelligence,
+    agility: state.attributes.agility,
+    constitution: state.attributes.constitution,
+    luck: state.attributes.luck,
+  };
 
   for (const item of Object.values(state.equipment.equipped)) {
     if (!item) continue;

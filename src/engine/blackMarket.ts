@@ -13,8 +13,10 @@ import type { ActionContext } from './actionContext.js';
 import type {
   BuyAndEquipPayload,
   RefreshBlackMarketPayload,
+  BuyItemPayload,
+  SellItemPayload,
 } from '../types/gameState.js';
-import type { EquipmentItem } from '../types/gameState.js';
+import type { EquipmentItem, EquipmentSlot } from '../types/gameState.js';
 import { GameError } from './errors.js';
 import { spendResource } from './resourceService.js';
 import { generateBlackMarketItems } from './equipmentGenerator.js';
@@ -132,27 +134,25 @@ export function buyAndEquipItem(
   }
   const item = bm.items[itemIndex]!;
 
-  // 2. 扣除铜钱（price 字段由 generateEquipment 保证存在）
+  // 2. 扣除铜钱
   const price = item.price ?? 0;
   spendResource(state, 'copper', price, 'NOT_ENOUGH_COPPER');
 
   // 3. 从黑市移除
   bm.items = bm.items.filter((_, idx) => idx !== itemIndex);
 
-  // 4. 装备到槽位（处理槽位替换）
+  // 4. 装备到槽位
   if (!isEquipmentSlot(item.slot)) {
     throw new GameError('INVALID_EQUIPMENT_SLOT', `无效槽位：${String(item.slot)}`);
   }
   const targetSlot = item.slot;
   const previousItem = state.equipment.equipped[targetSlot] ?? null;
 
-  // 旧装备入背包
   if (previousItem) {
     state.inventory.items.push(previousItem);
   }
   state.equipment.equipped[targetSlot] = item;
 
-  // 5. 标脏
   ctx.markDirty();
 
   return {
@@ -166,6 +166,133 @@ export function buyAndEquipItem(
       unequippedItem: previousItem,
       remainingItems: bm.items,
       nextAutoRefreshMs: calcNextAutoRefreshMs(bm.lastRefreshAt, now),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// BUY_ITEM
+// ---------------------------------------------------------------------------
+
+export type BuyItemView = {
+  purchasedItemId: string;
+  copperSpent: number;
+  remainingItems: EquipmentItem[];
+  nextAutoRefreshMs: number;
+};
+
+/**
+ * 购买商品并放入背包。
+ */
+export function buyItem(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): ActionSuccessResponse<BuyItemView> {
+  const { itemId } = payload as BuyItemPayload;
+  const { state, now } = ctx;
+
+  // 1. 查找商品
+  const itemIndex = state.blackMarket.items.findIndex(i => i.id === itemId);
+  if (itemIndex < 0) {
+    throw new GameError('ITEM_NOT_FOUND', `商品 ${itemId} 不在黑市中。`);
+  }
+  const item = state.blackMarket.items[itemIndex]!;
+
+  // 2. 检查背包容量 (假设基础 30 格)
+  const capacity = state.inventory.capacity ?? 30;
+  if (state.inventory.items.length >= capacity) {
+    throw new GameError('INVENTORY_FULL', '背囊已满，装不下更多宝贝了。');
+  }
+
+  // 3. 扣费
+  const price = item.price ?? 0;
+  spendResource(state, 'copper', price, 'NOT_ENOUGH_COPPER');
+
+  // 4. 转移
+  state.blackMarket.items = state.blackMarket.items.filter(i => i.id !== itemId);
+  state.inventory.items.push(item);
+
+  ctx.markDirty();
+
+  return {
+    ok: true,
+    action: 'BUY_ITEM',
+    serverTime: now,
+    stateRevision: state.meta.stateRevision,
+    data: {
+      purchasedItemId: itemId,
+      copperSpent: price,
+      remainingItems: state.blackMarket.items,
+      nextAutoRefreshMs: calcNextAutoRefreshMs(state.blackMarket.lastRefreshAt, now),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SELL_ITEM
+// ---------------------------------------------------------------------------
+
+export type SellItemView = {
+  soldItemId: string;
+  copperGained: number;
+};
+
+/**
+ * 出售物品。支持从背包出售，或直接出售身上穿戴的。
+ */
+export function sellItem(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): ActionSuccessResponse<SellItemView> {
+  const { itemId } = payload as SellItemPayload;
+  const { state, now } = ctx;
+
+  let targetItem: EquipmentItem | null = null;
+  let source: 'inventory' | 'equipment' = 'inventory';
+  let equipSlot: string | null = null;
+
+  // 1. 在背包里找
+  const invIdx = state.inventory.items.findIndex(i => i.id === itemId);
+  if (invIdx >= 0) {
+    targetItem = state.inventory.items[invIdx]!;
+    source = 'inventory';
+  } else {
+    // 2. 在身上找
+    for (const [slot, item] of Object.entries(state.equipment.equipped)) {
+      if (item?.id === itemId) {
+        targetItem = item;
+        source = 'equipment';
+        equipSlot = slot;
+        break;
+      }
+    }
+  }
+
+  if (!targetItem) {
+    throw new GameError('ITEM_NOT_FOUND', '找不到要出售的物品。');
+  }
+
+  // 3. 计算收益
+  const gain = targetItem.sellPrice ?? 0;
+  state.resources.copper += gain;
+
+  // 4. 移除
+  if (source === 'inventory') {
+    state.inventory.items = state.inventory.items.filter(i => i.id !== itemId);
+  } else if (equipSlot) {
+    state.equipment.equipped[equipSlot as EquipmentSlot] = null;
+  }
+
+  ctx.markDirty();
+
+  return {
+    ok: true,
+    action: 'SELL_ITEM',
+    serverTime: now,
+    stateRevision: state.meta.stateRevision,
+    data: {
+      soldItemId: itemId,
+      copperGained: gain,
     },
   };
 }

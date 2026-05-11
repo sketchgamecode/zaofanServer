@@ -16,10 +16,17 @@ export function upgradeAttribute(
     throw new GameError('INVALID_ATTRIBUTE_KEY', 'Attribute key is invalid.');
   }
 
-  const currentValue = ctx.state.attributes[attribute];
-  const costCopper = getAttributeUpgradeCost(currentValue);
+  // 角色必须已创建
+  if (ctx.state.player.status !== 'ACTIVE') {
+    throw new GameError('CHARACTER_NOT_CREATED', '角色尚未创建，无法升级属性。');
+  }
+
+  const boughtCount = ctx.state.attributes.bought[attribute];
+  const costCopper = getAttributeUpgradeCost(ctx.state.player.level, boughtCount);
   spendResource(ctx.state, 'copper', costCopper, 'NOT_ENOUGH_COPPER');
+
   ctx.state.attributes[attribute] += 1;
+  ctx.state.attributes.bought[attribute] += 1;
   ctx.markDirty();
 
   return {

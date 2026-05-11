@@ -48,6 +48,7 @@ export type TavernInfoData = {
     firstMissionBonusAvailable: boolean;
     missionOffers: MissionOffer[];
     activeMission: ActiveMissionView | null;
+    npcGreeting: TavernNpcGreeting | null;
   };
   mount: {
     timeMultiplierBp: number;
@@ -66,6 +67,116 @@ const MISSION_TITLES = [
   ['夜探仓库', '抄录名册', '伏击耳目'],
 ] as const;
 const ENEMY_ARCHETYPES = ['逃兵', '打手', '账房', '密探', '护卫', '地痞'] as const;
+
+/**
+ * 酒馆任务发布NPC
+ * 5名NPC，每人10条对话。对话基于offerSetId种子随机选取，
+ * 同一批任务总显示同一条对话，刷新后换人/换话。
+ */
+export type TavernNpcGreeting = {
+  npcId: string;
+  name: string;
+  dialogue: string;
+};
+
+const TAVERN_NPCS: ReadonlyArray<{ npcId: string; name: string; dialogues: readonly string[] }> = [
+  {
+    npcId: 'npc_laobao',
+    name: '老鲍',
+    dialogues: [
+      '喝完这碗，跟我走，城东有笔买卖。',
+      '钱的事我包了，你只管把人摆平。',
+      '上头催得急，你今晚能出发么？',
+      '活做得干净点，别留把柄。',
+      '放心，事成之后我不会亏待你。',
+      '这条路我走熟了，你跟我走准没错。',
+      '汴京的水深，外来的不懂，听我的。',
+      '多余的话别问，知道得越少越安全。',
+      '货在码头压着，今晚就要动。',
+      '这事只有你我知道，懂吗？',
+    ],
+  },
+  {
+    npcId: 'npc_cuihua',
+    name: '翠花',
+    dialogues: [
+      '客官，有没有兴趣听一个赚钱的故事？',
+      '小女子有个不情之请，望好汉莫要推辞。',
+      '那几个人每天从这条街过，就是今晚了。',
+      '帮了我，这里的酒以后都不收你钱。',
+      '上回托的人办砸了，这回只信你。',
+      '我哥的事，还得麻烦你跑一趟。',
+      '他们以为我只是个卖酒的，呵。',
+      '事情不大，就是要手脚快。',
+      '人没出城，你现在去还来得及。',
+      '酬劳这里，你先看一眼再决定。',
+    ],
+  },
+  {
+    npcId: 'npc_daoye',
+    name: '刀爷',
+    dialogues: [
+      '你这身手，浪费了，跟我干。',
+      '三天内办完，多的不说。',
+      '那票货我要了，就差个跑腿的人。',
+      '出了事我兜着，放手干。',
+      '没人比我更清楚这一带的底细。',
+      '你上回办的那件事，我听说了，不错。',
+      '不用打，把东西拿回来就行。',
+      '对方就两个人，你一个人足够。',
+      '这消息值三十文，你信不信？',
+      '做成这笔，你在这条街上就有面子了。',
+    ],
+  },
+  {
+    npcId: 'npc_mao_jiu',
+    name: '茂九',
+    dialogues: [
+      '哥们儿，这边坐，说个事。',
+      '我有一条路子，就缺个信得过的人。',
+      '不是什么大事，就是有点赶。',
+      '价钱好商量，你先说个数。',
+      '上头那边我打过招呼了，你直接去。',
+      '这活说复杂也复杂，说简单也简单。',
+      '只需要你去盯两个时辰，其他不用管。',
+      '之前跑这条路的人出了意外，只好找你了。',
+      '别往里头多想，当跑个腿就行。',
+      '事完了你直接来找我，别和别人说。',
+    ],
+  },
+  {
+    npcId: 'npc_xue_gu',
+    name: '薛姑',
+    dialogues: [
+      '老身有件事，年轻人怕是要跑一跑腿。',
+      '那条巷子里的事，只有你能帮得上。',
+      '放心，老身信人，从不欠账。',
+      '我儿子办不了这事，只好求到你头上。',
+      '天黑前能回来最好，回不来也无妨。',
+      '那边的人认识我，你带这个去就成。',
+      '此事关乎一家人的生计，还请仗义。',
+      '我在这里等你，哪儿也不去。',
+      '事情成了，我再请你喝一碗。',
+      '老了跑不动了，只能麻烦你了。',
+    ],
+  },
+] as const;
+
+/**
+ * 根据 offerSetId 作为随机种子，从5名NPC中稳定选取一名及其对话。
+ * 同一批任务（同一offerSetId）永远返回相同的NPC和对话；
+ * 下一批offer刷新后，种子改变，NPC/对话会随机更换。
+ */
+export function buildNpcGreeting(offerSetId: string): TavernNpcGreeting {
+  const rng = createSeededRandom(`${offerSetId}:npc`);
+  const npc = rng.pick(TAVERN_NPCS);
+  const dialogue = rng.pick(npc.dialogues);
+  return {
+    npcId: npc.npcId,
+    name: npc.name,
+    dialogue,
+  };
+}
 
 function bpMul(value: number, basisPoints: number): number {
   return Math.floor((value * basisPoints) / 10000);
@@ -222,6 +333,13 @@ export function buildActiveMissionView(activeMission: ActiveMission | null, now:
 }
 
 export function buildTavernInfoData(state: GameState, now: number): TavernInfoData {
+  // 取最新一批offer的offerSetId作为NPC种子：
+  // 若有活跃任务或已有offer，则使用当前offerSetId推算；
+  // 若尚无offer（状态刚初始化），则npcGreeting为null。
+  const currentOfferSetId = state.tavern.missionOffers[0]?.offerSetId
+    ?? state.tavern.activeMission?.offerSetId
+    ?? null;
+
   return {
     tavern: {
       status: getTavernStatus(state, now),
@@ -230,6 +348,7 @@ export function buildTavernInfoData(state: GameState, now: number): TavernInfoDa
       firstMissionBonusAvailable: !state.tavern.firstMissionBonusClaimed,
       missionOffers: state.tavern.missionOffers,
       activeMission: buildActiveMissionView(state.tavern.activeMission, now),
+      npcGreeting: currentOfferSetId ? buildNpcGreeting(currentOfferSetId) : null,
     },
     mount: {
       timeMultiplierBp: getCurrentMountMultiplierBp(state.mount, now),

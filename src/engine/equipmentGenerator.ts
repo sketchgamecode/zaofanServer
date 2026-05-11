@@ -57,6 +57,7 @@ const CLASS_MAIN_STAT: Record<PlayerClassId, keyof Pick<
   CLASS_B: 'intelligence',  // 谋士
   CLASS_C: 'agility',       // 游侠
   CLASS_D: 'agility',       // 刺客
+  CLASS_E: 'strength',      // 绿林好汉
 };
 
 /** 各职业允许使用的武器槽类型（决定兵器铺保障的"本职业武器"名称池） */
@@ -65,6 +66,7 @@ const CLASS_WEAPON_NAMES: Record<PlayerClassId, string[]> = {
   CLASS_B: ['羽扇', '玉如意', '符箓筒', '画卷', '龙泉剑'],
   CLASS_C: ['角弓', '铁胎弓', '雕翎箭袋', '短弩', '猎刀'],
   CLASS_D: ['匕首', '飞刀', '乌金钩', '袖箭', '副刃'],
+  CLASS_E: ['大刀', '铁棒', '狼牙棒', '石锤', '铁叉'],
 };
 
 /** 各槽位的通用名称池 */
@@ -184,6 +186,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
 
   // 价格
   const price = calcItemPrice(level, rarity);
+  const sellPrice = calcSellPrice(level, rarity);
 
   // 唯一 ID
   const id = `eq_${slot}_${Date.now().toString(36)}_${Math.floor(rng.next() * 0xffff).toString(16)}`;
@@ -198,6 +201,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
     armor,
     weaponDamage,
     price,
+    sellPrice,
     bonusAttributes,
   };
 }

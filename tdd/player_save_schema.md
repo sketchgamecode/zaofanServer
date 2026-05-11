@@ -33,15 +33,18 @@
 
 ### 2.1 MetaState (元数据)
 用于存档版本控制和同步。
-*   `schemaVersion`: `number` - 存档数据格式版本，用于后端执行数据迁移。
+*   `schemaVersion`: `number` - 存档数据格式版本（当前为 **2**），用于后端执行数据迁移。
 *   `stateRevision`: `number` - 存档变更版本，每次保存自增。
 *   `lastDailyResetDate`: `string` - 上次执行每日重置的日期 (YYYY-MM-DD)。
 
 ### 2.2 PlayerState (角色基础)
 *   `level`: `number` - 玩家等级。
 *   `exp`: `number` - 当前等级积累的经验值。
-*   `classId`: `CLASS_A | CLASS_B | CLASS_C | CLASS_D` - 职业标识。
-*   `displayName`: `string` - 玩家显示名称。
+*   `classId`: `PlayerClassId` - 职业标识（见 §3 枚举）。
+*   `raceId`: `RaceId` - 种族标识（见 §3 枚举）。
+*   `displayName?`: `string` - 玩家显示名称（创建后设置）。
+*   `avatarId?`: `string` - 头像文件标识（格式 `avatar_placeholder_{000-063}`）。
+*   `status`: `'PENDING_CREATION' | 'ACTIVE'` - 角色状态。新存档为 `PENDING_CREATION`，完成创建后变为 `ACTIVE`。
 
 ### 2.3 ResourceState (资源/货币)
 *   `copper`: `number` - 铜钱（基础货币）。
@@ -50,8 +53,9 @@
 *   `prestige`: `number` - 声望。
 
 ### 2.4 AttributeState (基础属性)
-存储的是 **裸装基础值**。
+存储的是 **裸装基础值**（含种族初始偏移）。
 *   `strength`, `intelligence`, `agility`, `constitution`, `luck`: `number` - 五大主属性。
+*   `bought`: `Record<AttributeKey, number>` - 玩家通过铜钱累计购买的各属性点数。用于阶梯式升级成本计算（公式见 `core_mechanics_and_formulas.md`）。
 
 ### 2.5 Inventory & Equipment (物品系统)
 #### EquipmentItem (物品模板)
@@ -64,7 +68,8 @@
 *   `armor?`: `number` - 防护值（仅 head/body/hands/feet/belt 槽位存在）。
 *   `weaponDamage?`: `{ min: number, max: number }` - 武器伤害区间（仅 weapon 槽及高品质 offHand 存在）。
 *   `price?`: `number` - 购买价格（铜钱），后端生成时计算好，前端直接展示。
-*   `bonusAttributes`: `Partial<AttributeState>` - 装备提供的属性加成（只包含非零属性）。
+*   `sellPrice`: `number` - 售卖价格（铜钱）。即使是不在商店中的装备，此字段也必须存在，通常为 `price` 的 25%。
+*   `bonusAttributes`: `Partial<BaseAttributeValues>` - 装备提供的属性加成（只包含非零的五大属性）。
 
 > [!NOTE]
 > **前端图标寻址规则**（配合 `Asset_Naming_Convention.md` § 3.1）：
@@ -84,10 +89,23 @@
 ## 3. 关键枚举与常量值
 
 ### 职业 (PlayerClassId)
-*   `CLASS_A`: 战士 (Warrior)
-*   `CLASS_B`: 法师 (Mage)
-*   `CLASS_C`: 射手 (Scout)
-*   `CLASS_D`: 刺客 (Assassin)
+遵循 `id_naming_convention.md` 抽象 ID 约定。
+*   `CLASS_A`: 猛将 (Warrior) — 主属性: 力量
+*   `CLASS_B`: 游侠 (Scout) — 主属性: 敏捷
+*   `CLASS_C`: 谋士 (Mage) — 主属性: 智力
+*   `CLASS_D`: 杀手 (Assassin) — 主属性: 敏捷
+*   `CLASS_E`: 绿林好汉 (Berserker) — 主属性: 力量
+
+### 种族 (RaceId)
+遵循 `id_naming_convention.md` 抽象 ID 约定。
+*   `RACE_01`: 中原人士 (Human) — 属性修正: 0/0/0/0/0
+*   `RACE_02`: 蓬莱仙客 (Elf) — 属性修正: -1/+2/0/-1/0
+*   `RACE_03`: 漠北蛮族 (Dwarf) — 属性修正: 0/-2/-1/+2/+1
+*   `RACE_04`: 苗岭童子 (Gnome) — 属性修正: -2/+3/-1/-1/+1
+*   `RACE_05`: 契丹豪勇 (Orc) — 属性修正: +1/0/-1/0/0
+*   `RACE_06`: 西夏一品堂 (Dark Elf) — 属性修正: -2/+2/+1/-1/0
+*   `RACE_07`: 岭南流寇 (Goblin) — 属性修正: -2/+2/0/-1/+1
+*   `RACE_08`: 摩尼教徒 (Demon) — 属性修正: +3/-1/0/+1/-3
 
 ### 装备槽位 (EquipmentSlot)
 `head`, `body`, `hands`, `feet`, `neck`, `belt`, `ring`, `trinket`, `weapon`, `offHand`
@@ -109,4 +127,4 @@
 3.  **战斗模拟**: 战斗是在后端计算的，存档中的 `battleResult.rounds` 包含了每一回合的攻击者、伤害和剩余血量，前端应根据此数组播放动画。
 
 ---
-*Last Updated: 2026-05-04*
+*Last Updated: 2026-05-10*

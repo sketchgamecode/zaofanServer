@@ -22,7 +22,14 @@ export type GameErrorCode =
   | 'NO_ACTIVE_MISSION'
   | 'NOT_ENOUGH_TOKENS'
   | 'NOT_ENOUGH_SKIP_RESOURCE'
-  | 'TAVERN_DRINK_LIMIT_REACHED';
+  | 'TAVERN_DRINK_LIMIT_REACHED'
+  | 'INVENTORY_FULL'
+  | 'CHARACTER_ALREADY_CREATED'
+  | 'CHARACTER_NOT_CREATED'
+  | 'INVALID_RACE'
+  | 'INVALID_CLASS'
+  | 'INVALID_NICKNAME'
+  | 'INVALID_AVATAR';
 
 export class GameError extends Error {
   public readonly code: GameErrorCode;

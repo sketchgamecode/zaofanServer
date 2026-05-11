@@ -42,9 +42,14 @@ export function createInitialGameState(input: { now: number; playerId?: string }
       level: INITIAL_PLAYER_LEVEL,
       exp: 0,
       classId: 'CLASS_A',
+      raceId: 'RACE_01',
+      status: 'PENDING_CREATION',
     },
     resources: { ...INITIAL_RESOURCES },
-    attributes: { ...INITIAL_ATTRIBUTES },
+    attributes: {
+      ...INITIAL_ATTRIBUTES,
+      bought: { ...INITIAL_ATTRIBUTES.bought },
+    },
     inventory: {
       items: [],
       capacity: 60,

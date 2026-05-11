@@ -1,4 +1,4 @@
-export type PlayerClassId = 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D';
+export type PlayerClassId = 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D' | 'CLASS_E';
 
 export type EquipmentSlot =
   | 'head'
@@ -15,6 +15,19 @@ export type EquipmentSlot =
 export type ItemRarity = 0 | 1 | 2 | 3 | 4;
 export type AttributeKey = 'strength' | 'intelligence' | 'agility' | 'constitution' | 'luck';
 
+export type RaceId =
+  | 'RACE_01' | 'RACE_02' | 'RACE_03' | 'RACE_04'
+  | 'RACE_05' | 'RACE_06' | 'RACE_07' | 'RACE_08';
+
+/** 纯五属性数值（不含 bought / unspentPoints） */
+export type BaseAttributeValues = {
+  strength: number;
+  intelligence: number;
+  agility: number;
+  constitution: number;
+  luck: number;
+};
+
 export type AttributeState = {
   strength: number;
   intelligence: number;
@@ -22,6 +35,8 @@ export type AttributeState = {
   constitution: number;
   luck: number;
   unspentPoints?: number;
+  /** 玩家通过铜钱累计购买的各属性点数（用于阶梯式成本计算） */
+  bought: Record<AttributeKey, number>;
 };
 
 export type EquipmentItem = {
@@ -34,7 +49,8 @@ export type EquipmentItem = {
   armor?: number;
   weaponDamage?: { min: number; max: number };
   price?: number;
-  bonusAttributes: Partial<AttributeState>;
+  sellPrice: number;
+  bonusAttributes: Partial<BaseAttributeValues>;
 };
 
 export type MetaState = {
@@ -50,7 +66,10 @@ export type PlayerState = {
   level: number;
   exp: number;
   classId: PlayerClassId;
+  raceId: RaceId;
   displayName?: string;
+  avatarId?: string;
+  status: 'PENDING_CREATION' | 'ACTIVE';
 };
 
 export type ResourceState = {
@@ -88,12 +107,15 @@ export type CharacterInfoView = {
     level: number;
     exp: number;
     classId: PlayerClassId;
+    raceId: RaceId;
     displayName?: string;
+    avatarId?: string;
+    status: 'PENDING_CREATION' | 'ACTIVE';
   };
   resources: ResourceState;
   attributes: {
-    base: Omit<AttributeState, 'unspentPoints'>;
-    total: Omit<AttributeState, 'unspentPoints'>;
+    base: BaseAttributeValues;
+    total: BaseAttributeValues;
     upgradeCosts: UpgradeCostsView;
   };
   combatPreview: CombatPreviewView;
@@ -127,6 +149,27 @@ export type RefreshBlackMarketPayload = {
 export type BuyAndEquipPayload = {
   /** 要购买并穿戴的商品 id，必须存在于 blackMarket.items 中 */
   itemId: string;
+};
+
+export type BuyItemPayload = {
+  /** 要购买到背包的商品 id */
+  itemId: string;
+};
+
+export type SellItemPayload = {
+  /** 要出售的物品 id（支持背包或已穿戴） */
+  itemId: string;
+};
+
+export type CreateCharacterPayload = {
+  /** 角色昵称，2-12 字符 */
+  nickname: string;
+  /** 职业 ID */
+  classId: PlayerClassId;
+  /** 种族 ID */
+  raceId: RaceId;
+  /** 头像 ID，如 "avatar_placeholder_003" */
+  avatarId: string;
 };
 
 export type VisibleReward = {
@@ -163,7 +206,7 @@ export type MountSnapshot = {
 export type PlayerCombatSnapshot = {
   level: number;
   classId?: PlayerClassId;
-  attributes: Omit<AttributeState, 'unspentPoints'>;
+  attributes: BaseAttributeValues;
   combatStats: {
     hp: number;
     armor: number;
@@ -184,7 +227,7 @@ export type EnemySnapshot = {
   enemyId: string;
   name: string;
   level: number;
-  attributes: Omit<AttributeState, 'unspentPoints'>;
+  attributes: BaseAttributeValues;
   combatStats: {
     hp: number;
     armor: number;

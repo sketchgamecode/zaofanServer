@@ -91,6 +91,7 @@
 | 动作名 (Action) | 说明 | Payload 示例 | 返回 Data 类型 |
 | :--- | :--- | :--- | :--- |
 | `PLAYER_GET_INFO` | 获取详细的角色面板信息 | `{}` | `CharacterInfoView` |
+| `CREATE_CHARACTER` | 首次创建角色（职业/种族/昵称/头像） | `{"nickname":"宋江","classId":"CLASS_A","raceId":"RACE_01","avatarId":"avatar_placeholder_003"}` | `CharacterInfoView` |
 | `UPGRADE_ATTRIBUTE` | 消耗铜钱升级属性 | `{"attribute": "strength"}` | `CharacterInfoView` |
 | `EQUIP_ITEM` | 穿戴背囊中的装备 | `{"itemId": "item_uuid"}` | `CharacterInfoView` |
 | `UNEQUIP_ITEM` | 卸下已穿戴的装备 | `{"slot": "head"}` | `CharacterInfoView` |
@@ -102,6 +103,8 @@
 | `SKIP_MISSION` | 使用沙漏或令牌跳过任务等待 | `{}` | `CompleteMissionData` |
 | `REFRESH_BLACKMARKET` | 刷新黑市商品（自动或消耗令牌手动刷新） | `{"force": false}` | `BlackMarketView` |
 | `BUY_AND_EQUIP_ITEM` | 购买黑市商品并立即穿戴至对应槽位 | `{"itemId": "eq_xxx"}` | `BuyAndEquipView` |
+| `BUY_ITEM` | 购买黑市商品并存入背囊 | `{"itemId": "eq_xxx"}` | `BuyItemView` |
+| `SELL_ITEM` | 出售物品（支持背囊或身上已穿戴的物品） | `{"itemId": "eq_xxx"}` | `SellItemView` |
 | `DEBUG_RESET_SAVE` | **(仅开发)** 重置存档 | `{}` | `{ "reset": true }` |
 
 ### 4.2 废弃动作 (Deprecated — 请勿新接)
@@ -126,6 +129,7 @@
 *   `thirstSecRemaining`: 剩余体力（秒）。
 *   `missionOffers`: 3个可选任务。
 *   `activeMission`: 当前进行中的任务详情。
+*   `npcGreeting`: 当前酒馆 NPC 的打招呼信息（包含名字和对话）。
 
 ### CompleteMissionData
 任务结算结果：
@@ -153,6 +157,15 @@
   unequippedItem: EquipmentItem | null; // 被替换下的旧装备（已自动入背包），无则 null
   remainingItems: EquipmentItem[]; // 购买后黑市剩余商品
   nextAutoRefreshMs: number;
+}
+```
+
+### TavernNpcGreeting (NPC 招呼)
+```typescript
+{
+  npcId: string;    // NPC 唯一标识 (如 npc_laobao, npc_cuihua)
+  name: string;     // NPC 显示名字
+  dialogue: string; // 随机选取的对话文本
 }
 ```
 
