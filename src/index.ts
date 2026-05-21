@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import saveRouter from './routes/save.js';
 import adminRouter from './routes/admin.js';
 import actionRouter from './routes/action.js';
+import debugRouter from './routes/debug.js';
 import { logServerEvent, getReleaseTag, getRuntimeEnv } from './lib/observability.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 
@@ -46,6 +47,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/save', saveRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/action', actionRouter);
+app.use('/api/debug', debugRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });

@@ -205,6 +205,8 @@ export function computeActualDurationSec(baseDurationSec: number, timeMultiplier
   return bpMul(baseDurationSec, timeMultiplierBp);
 }
 
+import { serverGlobalConfig } from '../config/serverGlobalConfig.js';
+
 function buildVisibleReward(level: number, durationMin: number, slotIndex: number, seed: string): VisibleReward {
   const rewardProfiles = [
     CLASSIC_TAVERN_RULES.rewardProfileWeights.xpFocused,
@@ -215,8 +217,8 @@ function buildVisibleReward(level: number, durationMin: number, slotIndex: numbe
   const rng = createSeededRandom(`${seed}:reward:${slotIndex}`);
   const baseXp = Math.max(8, level * durationMin * 3);
   const baseCopper = Math.max(6, level * durationMin * 2);
-  const xp = Math.max(1, bpMul(baseXp, profile.xpMulBp) + rng.int(0, level * 2));
-  const copper = Math.max(1, bpMul(baseCopper, profile.copperMulBp) + rng.int(0, durationMin));
+  const xp = Math.max(1, bpMul(baseXp, profile.xpMulBp) + rng.int(0, level * 2)) * serverGlobalConfig.debugTavernXpMultiplier;
+  const copper = Math.max(1, bpMul(baseCopper, profile.copperMulBp) + rng.int(0, durationMin)) * serverGlobalConfig.debugTavernCopperMultiplier;
   const hasEquipment = rng.chanceBp(CLASSIC_TAVERN_RULES.itemDropChanceBp);
 
   return {
