@@ -87,6 +87,79 @@ const SLOT_NAMES: Record<EquipmentSlot, string[]> = {
 // 内部工具
 // ---------------------------------------------------------------------------
 
+const ITEM_ICON_POOLS: Partial<Record<EquipmentSlot, string[]>> = {
+  head: [
+    'item_head_01',
+    'item_head_02',
+    'item_head_03',
+    'item_head_04',
+    'item_head_05',
+  ],
+  body: [
+    'item_body_01',
+    'item_body_02',
+    'item_body_03',
+    'item_body_04',
+    'item_body_05',
+  ],
+  hands: [
+    'item_hands_01',
+    'item_hands_02',
+    'item_hands_03',
+    'item_hands_04',
+    'item_hands_05',
+  ],
+  feet: [
+    'item_feet_01',
+    'item_feet_02',
+    'item_feet_03',
+    'item_feet_04',
+    'item_feet_05',
+  ],
+  neck: [
+    'item_neck_01',
+    'item_neck_02',
+    'item_neck_03',
+    'item_neck_04',
+    'item_neck_05',
+  ],
+  belt: [
+    'item_belt_01',
+    'item_belt_02',
+    'item_belt_03',
+    'item_belt_04',
+    'item_belt_05',
+  ],
+  ring: [
+    'item_ring_01',
+    'item_ring_02',
+    'item_ring_03',
+    'item_ring_04',
+    'item_ring_05',
+  ],
+  trinket: [
+    'item_trinket_01',
+    'item_trinket_02',
+    'item_trinket_03',
+    'item_trinket_04',
+    'item_trinket_05',
+  ],
+  weapon: [
+    'item_weapon_01',
+    'item_weapon_02',
+    'item_weapon_03',
+    'item_weapon_04',
+    'item_weapon_05',
+  ],
+  offHand: [
+    'item_offhand_01',
+    'item_offhand_02',
+    'item_offhand_03',
+    'item_offhand_04',
+    'item_offhand_05',
+  ],
+};
+
 /** 生成默认的非确定性 RNG（用于非测试场景） */
 function defaultRng(): SeededRandom {
   return {
@@ -164,6 +237,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
 
   // 装备名称
   const name = pickItemName(rng, slot, input.classId, rarity);
+  const iconId = pickItemIconId(rng, slot);
 
   // 武器伤害（仅 weapon 槽，以及部分 offHand 武器型副手）
   const isWeaponDmgSlot = slot === 'weapon';
@@ -197,6 +271,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
     description: buildDescription(name, rarity),
     slot,
     rarity,
+    iconId,
     subType: isWeaponDmgSlot ? 'weapon' : (slot === 'offHand' ? 'shield' : 'none'),
     armor,
     weaponDamage,
@@ -282,6 +357,11 @@ function pickItemName(
     return rng.pick(classNames);
   }
   return rng.pick(SLOT_NAMES[slot]);
+}
+
+function pickItemIconId(rng: SeededRandom, slot: EquipmentSlot): string | undefined {
+  const pool = ITEM_ICON_POOLS[slot];
+  return pool?.length ? rng.pick(pool) : undefined;
 }
 
 /**

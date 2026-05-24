@@ -45,6 +45,7 @@ export type EquipmentItem = {
   description: string;
   slot: EquipmentSlot;
   rarity: ItemRarity;
+  iconId?: string;
   subType?: 'weapon' | 'shield' | 'none';
   armor?: number;
   weaponDamage?: { min: number; max: number };
