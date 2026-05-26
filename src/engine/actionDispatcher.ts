@@ -13,6 +13,7 @@ import { refreshBlackMarket, buyAndEquipItem, buyItem, sellItem } from './blackM
 import { arenaFight, arenaGetInfo, arenaRefreshCandidates, arenaSkipCooldown } from './arena.js';
 import { mailDeleteBattleReplay, mailGetBattleReplay, mailGetBattleReplays, mailSaveMissionReplay } from './mail.js';
 import { dungeonFight } from './dungeon.js';
+import { worldActorsGetOverview } from './world.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
@@ -52,6 +53,7 @@ const ACTION_HANDLERS: Record<string, Handler> = {
   'MAIL_SAVE_MISSION_REPLAY': mailSaveMissionReplay,
   'MAIL_DELETE_BATTLE_REPLAY': mailDeleteBattleReplay,
   'DUNGEON_FIGHT': dungeonFight,
+  'WORLD_ACTORS_GET_OVERVIEW': worldActorsGetOverview,
 };
 
 export async function dispatchAction(

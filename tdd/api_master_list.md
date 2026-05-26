@@ -137,6 +137,14 @@
 *   `battleResult`: `BattleResultV2`，用于战斗播放与手动保存酒馆任务回放；不再提供旧 `BattleResult.rounds`。
 *   `grantedReward`: 实际获得的奖励内容。
 *   `playerDelta`: 玩家资源变动前后的对比。
+*   `powerResult?`: 权力结算结果（阶段1新增，成功时才存在）：
+    ```typescript
+    {
+      suspicionDelta: Partial<Record<PowerFactionId, number>>; // 本次增加的疑心
+      suspicionAfter: Partial<Record<PowerFactionId, number>>; // 结算后全量疑心
+    }
+    ```
+    失败时 `powerResult` 不存在，不修改 suspicion。
 
 ### BlackMarketView
 `REFRESH_BLACKMARKET` 的返回 data：
@@ -169,7 +177,67 @@
 }
 ```
 
-### EquipmentItem (关键字段)
+### MissionCaseType (差事案件类型) — 阶段1新增
+```typescript
+type MissionCaseType =
+  | 'raid'      // 突袭查抄
+  | 'audit'     // 稽查账册
+  | 'escort'    // 护送押运
+  | 'arrest'    // 拿问捉拿
+  | 'purge'     // 清洗株连
+  | 'smuggle'   // 走私暗运
+  | 'petition'; // 递送奏章
+```
+
+### MissionPowerContext (权力差事上下文) — 阶段1新增
+```typescript
+type MissionPowerContext = {
+  issuerFaction: PowerFactionId;                         // 差事发布方
+  targetFaction: PowerFactionId;                         // 差事目标/对手方
+  caseType: MissionCaseType;                             // 案件类型
+  powerDeltaPreview?: Partial<Record<PowerFactionId, number>>; // 预计权柄变化（阶段2+使用）
+  suspicionDeltaPreview?: Partial<Record<PowerFactionId, number>>; // 预计疑心变化（结算时写入）
+};
+```
+
+说明：
+- `MissionOffer.powerContext?` 在任务列表中携带此字段。
+- `ActiveMissionView.powerContext?` 在任务进行中也返回此字段。
+- 任务生成规则：
+  - **slot 0（同阵营）**：`issuerFaction = 玩家所属派系`，牵连低（`suspicionDeltaPreview` ≤ 1）。
+  - **slot 1（皇权中枢）**：`issuerFaction = 'imperial'`，奖励较高，`suspicionDeltaPreview` 2-5。
+  - **slot 2（跨阵营）**：`issuerFaction = 玩家所属派系`，牵连最明显，`suspicionDeltaPreview` 3-8。
+- 旧存档无 `powerFaction` 时，fallback 链：`raceId → RACE_CONFIGS[raceId].defaultFaction → 'imperial'`。
+
+### DungeonChapter (副本章节) — 阶段2新增字段
+
+`DungeonChapter` 类型新增可选字段 `powerCase`：
+```typescript
+interface DungeonChapter {
+  id: string;
+  name: string;
+  unlockLevel: number;
+  bosses: DungeonBoss[];
+  /** 阶段2新增：权力案件包装（仅权力清洗章节存在） */
+  powerCase?: {
+    issuerFaction: PowerFactionId;
+    targetFactions: PowerFactionId[];
+    historicalHook: string;
+    suspicionDeltaOnWin?: Partial<Record<PowerFactionId, number>>;
+  };
+}
+```
+
+### 蓝玉案内置章节 (case_lanyu_purge)
+
+- **id**: `case_lanyu_purge`
+- **name**: 蓝玉案
+- **unlockLevel**: 1（新手可挑战）
+- **powerCase.issuerFaction**: `imperial`
+- **powerCase.targetFactions**: `['noble', 'border']`
+- **powerCase.historicalHook**: 皇权清洗军功集团，查抄、拿问、追捕牺连旧部。洪武年间，蓝玉以谋反之名被诵，株连万五千人，勋贵、边将无不自危。
+- **suspicionDeltaOnWin**: `{ noble: 2, border: 1 }`
+- **Boss 包装**: 大明权力清洗主题（蓝党旧将、国公府亲兵、边镇粮道心腹、军功旧部、牺连供状经手人等）
 ```typescript
 {
   id: string;           // 唯一标识，格式：eq_{slot}_{time36}_{rand16}
@@ -509,14 +577,37 @@ Arena errors:
 ### 8.5 Dungeon API
 
 ```typescript
-type DungeonFightData = {
-  result: 'WIN' | 'LOSE';
+### DUNGEON_FIGHT
+副本战斗结果：
+*   `result`: `WIN` | `LOSE`
+*   `chapterId`, `bossId`, `progressAfter`: 进度跟踪。
+*   `battleResult`: `BattleResultV2`。
+*   `grantedReward`: `{ xp, copper }`，失败时为 0。
+*   `powerCase?`: 章节权力案件包装（阶段2新增，仅存在于权力案件章节）：
+    ```typescript
+    {
+      issuerFaction: PowerFactionId;       // 案件发起方
+      targetFactions: PowerFactionId[];    // 案件目标方（可多方）
+      historicalHook: string;              // 史实钩子，前端展示案件背景
+      suspicionDeltaOnWin?: Partial<Record<PowerFactionId, number>>; // 胜利疑心预览
+    }
+    ```
+*   `powerResult?`: 权力结算结果（阶段2新增，成功且章节有 powerCase 时存在）：
+    ```typescript
+    {
+      suspicionDelta: Partial<Record<PowerFactionId, number>>; // 本次增加的疑心
+      suspicionAfter: Partial<Record<PowerFactionId, number>>; // 结算后全量疑心
+    }
+    ```
+    失败时 `powerResult` 不存在，不修改 suspicion。
+};
+
+type DungeonChapter = {
   chapterId: string;
-  bossId: string;
-  progressAfter: number;
-  battleResult: BattleResultV2;
-  replayId: string;
-  grantedReward: { xp: number; copper: number };
+  powerCase?: {
+    issuerFaction: PowerFactionId;
+    targetFactions: PowerFactionId[];
+  };
 };
 ```
 
@@ -623,3 +714,31 @@ curl -X POST http://localhost:3001/api/action/ \
 ```
 
 *Last Updated: 2026-05-11*
+
+### 8.7 World Actor Pool (阶段 3)
+
+### WORLD_ACTORS_GET_OVERVIEW
+
+获取大明权力地图世界角色分布概览。用于冷启动或前端展现世界格局。
+**Request Payload**: `{}`
+**Response Data**:
+```typescript
+{
+  totalActors: number; // 260
+  totalPowerShare: number; // 10000
+  byFaction: Array<{
+    faction: PowerFactionId;
+    actorCount: number;
+    powerShare: number;
+  }>;
+  byLocation: Array<{
+    locationId: string;
+    name: string;
+    ownerFaction: PowerFactionId;
+    actorCount: number;
+    powerShare: number;
+  }>;
+}
+```
+
+*Last Updated: 2026-05-26*

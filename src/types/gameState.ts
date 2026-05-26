@@ -1,5 +1,22 @@
 export type PlayerClassId = 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D' | 'CLASS_E';
 
+/**
+ * 权力派系标识 — 大明体制内升迁设定
+ * imperial   = 皇权内廷
+ * noble      = 勋贵集团
+ * censorate  = 清流科道
+ * border     = 边军武勋
+ * silver     = 工商银库
+ * underworld = 江湖秘社
+ */
+export type PowerFactionId =
+  | 'imperial'
+  | 'noble'
+  | 'censorate'
+  | 'border'
+  | 'silver'
+  | 'underworld';
+
 export type EquipmentSlot =
   | 'head'
   | 'body'
@@ -71,6 +88,10 @@ export type PlayerState = {
   displayName?: string;
   avatarId?: string;
   status: 'PENDING_CREATION' | 'ACTIVE';
+  /** 玩家所属权力派系（新角色创建时按出身初始化，旧存档可为 undefined） */
+  powerFaction?: PowerFactionId;
+  /** 各派系对玩家的疑心值，0 = 无疑心（新角色创建时全部初始化为 0） */
+  suspicion?: Partial<Record<PowerFactionId, number>>;
 };
 
 export type ResourceState = {
@@ -112,6 +133,8 @@ export type CharacterInfoView = {
     displayName?: string;
     avatarId?: string;
     status: 'PENDING_CREATION' | 'ACTIVE';
+    powerFaction?: PowerFactionId;
+    suspicion?: Partial<Record<PowerFactionId, number>>;
   };
   resources: ResourceState;
   attributes: {
@@ -370,6 +393,37 @@ export type PlayerDelta = {
   prestigeAfter: number;
 };
 
+/**
+ * 权力差事案件类型
+ * raid=突袭查抄 audit=稽查账册 escort=护送押运 arrest=拿问捉拿
+ * purge=清洗株连 smuggle=走私暗运 petition=递送奏章
+ */
+export type MissionCaseType =
+  | 'raid'
+  | 'audit'
+  | 'escort'
+  | 'arrest'
+  | 'purge'
+  | 'smuggle'
+  | 'petition';
+
+/**
+ * 权力差事上下文 — 记录发布方、目标方、案件类型和牵连预览。
+ * 所有字段都用于前端展示和结算逻辑。
+ */
+export type MissionPowerContext = {
+  /** 差事发布方 */
+  issuerFaction: PowerFactionId;
+  /** 差事目标/对手方 */
+  targetFaction: PowerFactionId;
+  /** 案件类型 */
+  caseType: MissionCaseType;
+  /** 预计权柄变化（未来阶段使用，当前可为空） */
+  powerDeltaPreview?: Partial<Record<PowerFactionId, number>>;
+  /** 预计疑心变化（结算时按此值写入 player.suspicion） */
+  suspicionDeltaPreview?: Partial<Record<PowerFactionId, number>>;
+};
+
 export type MissionOffer = {
   offerSetId: string;
   missionId: string;
@@ -384,6 +438,8 @@ export type MissionOffer = {
   visibleReward: VisibleReward;
   enemyPreview: EnemyPreview;
   generatedAt: number;
+  /** 权力集团差事上下文（阶段1新增） */
+  powerContext?: MissionPowerContext;
 };
 
 export type ActiveMission = {
@@ -407,6 +463,8 @@ export type ActiveMission = {
   rewardSeed: string;
   settlementStatus: 'UNSETTLED' | 'SETTLED';
   rewardGranted: boolean;
+  /** 权力集团差事上下文（从 MissionOffer 携带过来，确保结算时不丢失） */
+  powerContext?: MissionPowerContext;
 };
 
 export type MissionSettlement = {
@@ -421,6 +479,11 @@ export type MissionSettlement = {
   canSaveReplay?: boolean;
   replayId?: string | null;
   playerDelta: PlayerDelta;
+  /** 权力结算结果：疑心变化 + 结算后值（阶段1新增） */
+  powerResult?: {
+    suspicionDelta: Partial<Record<PowerFactionId, number>>;
+    suspicionAfter: Partial<Record<PowerFactionId, number>>;
+  };
 };
 
 export type TavernState = {
@@ -516,6 +579,25 @@ export type DungeonState = {
   lastDailyResetDate: string;
 };
 
+export type WorldActor = {
+  actorId: string;
+  kind: 'bot' | 'player';
+  displayName: string;
+  raceId: RaceId;
+  classId: PlayerClassId;
+  faction: PowerFactionId;
+  locationId: string;
+  level: number;
+  powerShare: number;
+  combatSnapshot: PlayerCombatSnapshot;
+  replacedByPlayerId?: string;
+};
+
+export type WorldState = {
+  status: 'UNINITIALIZED' | 'ACTIVE';
+  actors: WorldActor[];
+};
+
 export type GameState = {
   meta: MetaState;
   player: PlayerState;
@@ -528,6 +610,7 @@ export type GameState = {
   blackMarket: BlackMarketState;
   arena: ArenaState;
   dungeon: DungeonState;
+  world: WorldState;
 };
 
 export function isEquipmentSlot(value: unknown): value is EquipmentSlot {
@@ -560,6 +643,6 @@ export function isGameState(value: unknown): value is GameState {
   if (!isObject(value.meta) || !isObject(value.player) || !isObject(value.resources)) return false;
   if (!isObject(value.attributes) || !isObject(value.inventory) || !isObject(value.equipment)) return false;
   if (!isObject(value.tavern) || !isObject(value.mount) || !isObject(value.blackMarket)) return false;
-  if (!isObject(value.arena) || !isObject(value.dungeon)) return false;
+  if (!isObject(value.arena) || !isObject(value.dungeon) || !isObject(value.world)) return false;
   return typeof value.meta.schemaVersion === 'number';
 }

@@ -91,5 +91,9 @@ export function createInitialGameState(input: { now: number; playerId?: string }
       dailyAttemptsUsed: 0,
       lastDailyResetDate: today,
     },
+    world: {
+      status: 'UNINITIALIZED',
+      actors: [],
+    },
   };
 }

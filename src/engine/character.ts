@@ -28,6 +28,8 @@ export function buildCharacterInfoView(state: ActionContext['state']): Character
       displayName: state.player.displayName,
       avatarId: state.player.avatarId,
       status: state.player.status,
+      powerFaction: state.player.powerFaction,
+      suspicion: state.player.suspicion,
     },
     resources: {
       copper: state.resources.copper,

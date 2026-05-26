@@ -168,7 +168,7 @@ describe('CREATE_CHARACTER — 输入校验', () => {
       classId: 'WARRIOR' as any,
       raceId: 'RACE_01',
       avatarId: 'avatar_placeholder_000',
-    })).toThrowError(/无效的职业/);
+    })).toThrowError(/无效的职司/);
   });
 
   it('无效种族 ID 应抛出 INVALID_RACE', () => {
@@ -179,7 +179,7 @@ describe('CREATE_CHARACTER — 输入校验', () => {
       classId: 'CLASS_A',
       raceId: 'HUMAN' as any,
       avatarId: 'avatar_placeholder_000',
-    })).toThrowError(/无效的种族/);
+    })).toThrowError(/无效的出身/);
   });
 
   it('无效头像 ID 应抛出 INVALID_AVATAR', () => {
@@ -191,6 +191,101 @@ describe('CREATE_CHARACTER — 输入校验', () => {
       raceId: 'RACE_01',
       avatarId: 'bad_avatar',
     })).toThrowError(/无效的头像/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. CREATE_CHARACTER — powerFaction / suspicion 初始化
+// ---------------------------------------------------------------------------
+describe('CREATE_CHARACTER — powerFaction 和 suspicion 初始化', () => {
+  const FACTIONS = ['imperial', 'noble', 'censorate', 'border', 'silver', 'underworld'] as const;
+
+  it('RACE_01(军户) → powerFaction 应为 border', () => {
+    const state = makePendingState();
+    createCharacter(makeCtx(state), {
+      nickname: '小兵',
+      classId: 'CLASS_A',
+      raceId: 'RACE_01',
+      avatarId: 'avatar_placeholder_000',
+    });
+    expect(state.player.powerFaction).toBe('border');
+  });
+
+  it('RACE_03(市井商贾) → powerFaction 应为 silver', () => {
+    const state = makePendingState();
+    createCharacter(makeCtx(state), {
+      nickname: '商贾',
+      classId: 'CLASS_C',
+      raceId: 'RACE_03',
+      avatarId: 'avatar_placeholder_001',
+    });
+    expect(state.player.powerFaction).toBe('silver');
+  });
+
+  it('RACE_05(清流世家) → powerFaction 应为 censorate', () => {
+    const state = makePendingState();
+    createCharacter(makeCtx(state), {
+      nickname: '世家子',
+      classId: 'CLASS_C',
+      raceId: 'RACE_05',
+      avatarId: 'avatar_placeholder_002',
+    });
+    expect(state.player.powerFaction).toBe('censorate');
+  });
+
+  it('RACE_07(流民) → powerFaction 应为 underworld', () => {
+    const state = makePendingState();
+    createCharacter(makeCtx(state), {
+      nickname: '流民甲',
+      classId: 'CLASS_B',
+      raceId: 'RACE_07',
+      avatarId: 'avatar_placeholder_003',
+    });
+    expect(state.player.powerFaction).toBe('underworld');
+  });
+
+  it('新角色创建后所有派系的疑心度应全部为 0', () => {
+    const state = makePendingState();
+    createCharacter(makeCtx(state), {
+      nickname: '新兵',
+      classId: 'CLASS_A',
+      raceId: 'RACE_02',
+      avatarId: 'avatar_placeholder_010',
+    });
+    expect(state.player.suspicion).toBeDefined();
+    for (const faction of FACTIONS) {
+      expect(state.player.suspicion![faction]).toBe(0);
+    }
+  });
+
+  it('CharacterInfoView 中应返回 powerFaction 和 suspicion', () => {
+    const state = makePendingState();
+    const res = createCharacter(makeCtx(state), {
+      nickname: '小张',
+      classId: 'CLASS_A',
+      raceId: 'RACE_04',
+      avatarId: 'avatar_placeholder_020',
+    });
+    expect(res.data.player.powerFaction).toBe('silver');
+    expect(res.data.player.suspicion).toBeDefined();
+    expect(res.data.player.suspicion!.imperial).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3c. CREATE_CHARACTER — 旧存档兼容性
+// ---------------------------------------------------------------------------
+describe('旧存档兑容性 — 不含 powerFaction/suspicion 时现有逻辑不受影响', () => {
+  it('旧存档不含 powerFaction 时，upgradeAttribute 不应报错', () => {
+    const state = makeActiveState();
+    // 模拟旧存档：不含新字段
+    delete (state.player as any).powerFaction;
+    delete (state.player as any).suspicion;
+    // upgradeAttribute 不应抛错
+    expect(() => upgradeAttribute(makeCtx(state), { attribute: 'strength' })).not.toThrow();
+    // 字段不存在也不应影响状态
+    expect(state.player.powerFaction).toBeUndefined();
+    expect(state.player.suspicion).toBeUndefined();
   });
 });
 

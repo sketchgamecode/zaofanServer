@@ -83,4 +83,16 @@
 | `BATTLE_REPLAY_WRITE_FAILED` | 回放写入/删除失败 | 提示重试，避免前端标记成功 |
 | `MISSION_REPLAY_NOT_AVAILABLE` | 当前没有可手动保存的酒馆任务回放 | 隐藏或禁用保存按钮 |
 
-*Last Updated: 2026-05-11*
+*Last Updated: 2026-05-26*
+
+---
+
+## 8. 角色创建 (Character Creation)
+
+| ErrorCode | 含义 | 推荐交互策略 |
+| :--- | :--- | :--- |
+| `CHARACTER_ALREADY_CREATED` | 角色已创建，不可重复执行 | 静默跳转角色主界面 |
+| `INVALID_NICKNAME` | 昵称不合法（长度不符或含非法字符） | 提示"昵称须在 2-12 字符之间" |
+| `INVALID_CLASS` | 无效的职司 ID | 代码级错误，前端核对 PlayerClassId 枚举 |
+| `INVALID_RACE` | 无效的出身 ID | 代码级错误，前端核对 RaceId 枚举 |
+| `INVALID_AVATAR` | 无效的头像 ID | 代码级错误，前端核对头像格式 |

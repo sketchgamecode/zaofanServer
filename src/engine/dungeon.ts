@@ -1,6 +1,6 @@
 import { DUNGEON_CHAPTERS } from '../data/dungeonTable.js';
 import type { ActionSuccessResponse } from '../types/action.js';
-import type { CombatantSnapshot } from '../types/gameState.js';
+import type { CombatantSnapshot, PowerFactionId } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildBattleReplayRecord } from './battleReplayRecords.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
@@ -8,6 +8,46 @@ import { simulateBattleV2 } from './combatSimulator.js';
 import { GameError } from './errors.js';
 import { grantExp, grantResource } from './resourceService.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
+
+/** 所有已知派系，用于 suspicion 补全（与 missions.ts 保持一致） */
+const ALL_FACTIONS: ReadonlyArray<PowerFactionId> = [
+  'imperial', 'noble', 'censorate', 'border', 'silver', 'underworld',
+];
+
+/**
+ * 应用地下城胜利时的权力疑心变化。
+ * 逻辑与 missions.ts 中的 applyPowerSuspicion 相同：旧存档自动补全，返回 delta 和 after。
+ */
+function applyDungeonSuspicion(
+  ctx: ActionContext,
+  suspicionDeltaOnWin: Partial<Record<PowerFactionId, number>>,
+): { suspicionDelta: Partial<Record<PowerFactionId, number>>; suspicionAfter: Partial<Record<PowerFactionId, number>> } {
+  // 旧存档没有 suspicion，先全部初始化为 0
+  if (!ctx.state.player.suspicion) {
+    ctx.state.player.suspicion = {};
+  }
+  const suspicion = ctx.state.player.suspicion;
+
+  // 补全缺失派系
+  for (const faction of ALL_FACTIONS) {
+    if (suspicion[faction] === undefined) {
+      suspicion[faction] = 0;
+    }
+  }
+
+  const actualDelta: Partial<Record<PowerFactionId, number>> = {};
+  for (const [faction, delta] of Object.entries(suspicionDeltaOnWin) as [PowerFactionId, number][]) {
+    if (delta !== 0) {
+      const current = suspicion[faction] ?? 0;
+      const newVal = Math.max(0, current + delta);
+      suspicion[faction] = newVal;
+      actualDelta[faction] = newVal - current;
+    }
+  }
+
+  const suspicionAfter: Partial<Record<PowerFactionId, number>> = { ...suspicion };
+  return { suspicionDelta: actualDelta, suspicionAfter };
+}
 
 function playerSnapshotToCombatant(ctx: ActionContext): CombatantSnapshot {
   const snapshot = buildPlayerCombatSnapshot(ctx.state);
@@ -68,13 +108,23 @@ export async function dungeonFight(ctx: ActionContext, payload: Record<string, u
   });
 
   const grantedReward = { xp: 0, copper: 0 };
+  // 权力结算结果（仅成功且章节有 powerCase 时存在）
+  let powerResult: { suspicionDelta: Partial<Record<PowerFactionId, number>>; suspicionAfter: Partial<Record<PowerFactionId, number>> } | undefined;
+
   if (battleResult.playerWon) {
     ctx.state.dungeon.progress[chapter.id] = progress + 1;
     grantedReward.xp = boss.rewardXp;
     grantedReward.copper = boss.rewardCoins;
     grantExp(ctx.state, boss.rewardXp);
     grantResource(ctx.state, 'copper', boss.rewardCoins);
+
+    // 阶段2：章节有 powerCase.suspicionDeltaOnWin 时写入疑心值
+    const suspicionDeltaOnWin = chapter.powerCase?.suspicionDeltaOnWin;
+    if (suspicionDeltaOnWin && Object.keys(suspicionDeltaOnWin).length > 0) {
+      powerResult = applyDungeonSuspicion(ctx, suspicionDeltaOnWin);
+    }
   }
+  // 失败时不修改 suspicion（阶段2设计：失败不加疑心）
 
   ctx.state.dungeon.dailyAttemptsUsed += 1;
   const replay = await insertBattleReplay(buildBattleReplayRecord({
@@ -101,6 +151,10 @@ export async function dungeonFight(ctx: ActionContext, payload: Record<string, u
       battleResult,
       replayId: replay.replayId,
       grantedReward,
+      /** 权力结算结果（阶段2新增，成功且章节有 powerCase 时存在） */
+      powerResult,
+      /** 章节权力案件包装，透传给前端（阶段2新增） */
+      powerCase: chapter.powerCase,
     },
   };
 }

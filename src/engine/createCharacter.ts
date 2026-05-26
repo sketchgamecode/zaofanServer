@@ -57,10 +57,10 @@ export function createCharacter(
     throw new GameError('INVALID_NICKNAME', '昵称长度须在 2-12 字符之间。');
   }
   if (!isValidClassId(classId)) {
-    throw new GameError('INVALID_CLASS', `无效的职业 ID：${String(classId)}`);
+    throw new GameError('INVALID_CLASS', `无效的职司 ID：${String(classId)}`);
   }
   if (!isValidRaceId(raceId)) {
-    throw new GameError('INVALID_RACE', `无效的种族 ID：${String(raceId)}`);
+    throw new GameError('INVALID_RACE', `无效的出身 ID：${String(raceId)}`);
   }
   if (!isValidAvatarId(avatarId)) {
     throw new GameError('INVALID_AVATAR', `无效的头像 ID：${String(avatarId)}`);
@@ -79,7 +79,18 @@ export function createCharacter(
   state.player.avatarId = avatarId as string;
   state.player.status = 'ACTIVE';
 
-  // 5. 重置初始资源（设计稿：初始金钱、经验设为 0）
+  // 5. 初始化权力归属与疑心度（按出身设定默认派系）
+  state.player.powerFaction = raceConfig.defaultFaction;
+  state.player.suspicion = {
+    imperial: 0,
+    noble: 0,
+    censorate: 0,
+    border: 0,
+    silver: 0,
+    underworld: 0,
+  };
+
+  // 6. 重置初始资源（设计稿：初始金錢、经验设为 0）
   state.player.exp = 0;
   state.resources.copper = 0;
 

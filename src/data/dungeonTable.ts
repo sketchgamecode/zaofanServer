@@ -1,7 +1,9 @@
-/** 
+﻿/** 
  * 副本 Boss 数值配置表 (v1.0)
  * 核心设计：暗黑武侠文化解构。数值强指数级膨胀设计，验证中后期的系统养成深度。
  */
+
+import type { PowerFactionId } from '../types/gameState.js';
 
 export interface DungeonBoss {
   id: string;
@@ -27,6 +29,20 @@ export interface DungeonChapter {
   name: string;
   unlockLevel: number;    // 章节解锁所需等级
   bosses: DungeonBoss[];  // 固定长度 10
+  /**
+   * 权力案件包装（阶段2新增）。
+   * 存在此字段时，该副本是一个权力清洗案件，胜利后将写入 suspicion。
+   */
+  powerCase?: {
+    /** 案件发起方 */
+    issuerFaction: PowerFactionId;
+    /** 案件目标方（可多方） */
+    targetFactions: PowerFactionId[];
+    /** 史实钩子▷用于前端展示案件背景 */
+    historicalHook: string;
+    /** 胜利时各派系疑心增加值 */
+    suspicionDeltaOnWin?: Partial<Record<PowerFactionId, number>>;
+  };
 }
 
 export const DUNGEON_CHAPTERS: DungeonChapter[] = [
@@ -160,5 +176,32 @@ export const DUNGEON_CHAPTERS: DungeonChapter[] = [
       { id: "c6_b9", name: "万毒归宗阵眼石人", description: "这块生辰石被药酒泡了几百年，连上面长的青苔都能当场毒死一头水牛。", level: 73, class: "CLASS_A", attributes: { strength: 450000, dexterity: 85000, intelligence: 150000, constitution: 750000, luck: 120000 }, weaponDamage: 280000, armor: 280000, rewardXp: 12800000, rewardCoins: 8500000 },
       { id: "c6_b10", name: "【毒魁】唐门老祖之影", description: "‘佛怒唐莲？不，老夫这叫众生平等！沾上一点，神仙也得下去陪葬！’", level: 75, class: "CLASS_B", attributes: { strength: 350000, dexterity: 650000, intelligence: 280000, constitution: 600000, luck: 450000 }, weaponDamage: 550000, armor: 250000, rewardXp: 16000000, rewardCoins: 10500000 }
     ]
-  }
+  },
+
+  // ============================================================================
+  // 蓝玉案：【权力清洗 · 洪武清场】 - 大明洪武年间军功集团清洗 (Unlock: 1)
+  // ============================================================================
+  {
+    id: 'case_lanyu_purge',
+    name: '蓝玉案',
+    unlockLevel: 1,
+    powerCase: {
+      issuerFaction: 'imperial',
+      targetFactions: ['noble', 'border'],
+      historicalHook: '皇权清洗军功集团，查抄、拿问、追捕牵连旧部。洪武年间，蓝玉以谋反之名被诛，株连万五千人，勋贵、边将无不自危。',
+      suspicionDeltaOnWin: { noble: 2, border: 1 },
+    },
+    bosses: [
+      { id: 'lanyu_b1', name: '蓝党旧部门丁', description: '蓝国公府上的看门人，如今国公已死，他只剩一身旧日的傲气和一口烂牙。', level: 1, class: 'CLASS_A', attributes: { strength: 12, dexterity: 8, intelligence: 5, constitution: 15, luck: 5 }, weaponDamage: 8, armor: 5, rewardXp: 120, rewardCoins: 80 },
+      { id: 'lanyu_b2', name: '国公府亲兵哨官', description: '跟着蓝国公横行多年，如今朝廷拿问，他第一个想到的是把国公的头颅当进身之阶。', level: 2, class: 'CLASS_A', attributes: { strength: 15, dexterity: 10, intelligence: 6, constitution: 20, luck: 6 }, weaponDamage: 11, armor: 8, rewardXp: 160, rewardCoins: 110 },
+      { id: 'lanyu_b3', name: '边镇粮道心腹', description: '替蓝党倒腾边境军粮的掮客，账册里的每一笔都够他掉三次脑袋。', level: 3, class: 'CLASS_D', attributes: { strength: 10, dexterity: 20, intelligence: 12, constitution: 15, luck: 10 }, weaponDamage: 12, armor: 5, rewardXp: 210, rewardCoins: 145 },
+      { id: 'lanyu_b4', name: '军功旧部百户', description: '随蓝玉北征燕然，立过战功。如今功劳变成了株连的罪证。', level: 4, class: 'CLASS_A', attributes: { strength: 22, dexterity: 13, intelligence: 8, constitution: 28, luck: 8 }, weaponDamage: 16, armor: 12, rewardXp: 270, rewardCoins: 185 },
+      { id: 'lanyu_b5', name: '牵连供状经手人', description: '刑部小吏，专门整理蓝玉案供状，不知从哪捞了一手好刀法，护着那摞致命的文书。', level: 5, class: 'CLASS_C', attributes: { strength: 12, dexterity: 18, intelligence: 30, constitution: 22, luck: 15 }, weaponDamage: 18, armor: 8, rewardXp: 340, rewardCoins: 235 },
+      { id: 'lanyu_b6', name: '国公府护院统领', description: '蓝家最后的精锐，誓死护着那些见不得光的财产清单。打败他，才能抄得彻底。', level: 6, class: 'CLASS_A', attributes: { strength: 32, dexterity: 18, intelligence: 10, constitution: 40, luck: 10 }, weaponDamage: 22, armor: 18, rewardXp: 420, rewardCoins: 290 },
+      { id: 'lanyu_b7', name: '逃窜的蓝党谋主', description: '替蓝国公出谋划策的幕僚，打算逃往云南行都司投奔旧部，被截在这里。', level: 7, class: 'CLASS_C', attributes: { strength: 18, dexterity: 25, intelligence: 48, constitution: 32, luck: 22 }, weaponDamage: 28, armor: 12, rewardXp: 510, rewardCoins: 355 },
+      { id: 'lanyu_b8', name: '边镇残部游击', description: '不肯束手就擒的边军游击，带着一队亲兵在山中躲藏，身上有蓝党的私印。', level: 8, class: 'CLASS_B', attributes: { strength: 28, dexterity: 45, intelligence: 18, constitution: 38, luck: 28 }, weaponDamage: 30, armor: 14, rewardXp: 620, rewardCoins: 430 },
+      { id: 'lanyu_b9', name: '勋贵党援通风者', description: '替蓝党在京中布置耳目、通风报信的内应，已为其金蝉脱壳安排好了退路。', level: 9, class: 'CLASS_D', attributes: { strength: 25, dexterity: 60, intelligence: 35, constitution: 42, luck: 40 }, weaponDamage: 35, armor: 16, rewardXp: 750, rewardCoins: 520 },
+      { id: 'lanyu_b10', name: '【首恶】蓝玉旧将·凉国卫将军', description: '蓝玉帐下首席大将，案发后拒不受缚，纠合旧部据守，誓与株连令周旋到底。', level: 11, class: 'CLASS_A', attributes: { strength: 70, dexterity: 38, intelligence: 22, constitution: 95, luck: 28 }, weaponDamage: 55, armor: 35, rewardXp: 980, rewardCoins: 680 },
+    ],
+  },
 ];

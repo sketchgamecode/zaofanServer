@@ -5,7 +5,10 @@ import type {
   EnemyPreview,
   GameState,
   MissionOffer,
+  MissionPowerContext,
   MountState,
+  PowerFactionId,
+  RaceId,
   VisibleReward,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
@@ -13,6 +16,7 @@ import { GameError } from './errors.js';
 import { createSeededRandom } from '../lib/rng.js';
 import { spendResource } from './resourceService.js';
 import { getGameDateString } from '../lib/time.js';
+import { RACE_CONFIGS } from '../config/raceConfig.js';
 
 export type TavernStatus = 'IDLE' | 'IN_PROGRESS' | 'READY_TO_COMPLETE';
 
@@ -38,6 +42,8 @@ export type ActiveMissionView = {
     hasHourglass: boolean;
   };
   mountSnapshot: ActiveMission['mountSnapshot'];
+  /** 权力集团差事上下文（阶段1新增） */
+  powerContext?: MissionPowerContext;
 };
 
 export type TavernInfoData = {
@@ -67,6 +73,125 @@ const MISSION_TITLES = [
   ['夜探仓库', '抄录名册', '伏击耳目'],
 ] as const;
 const ENEMY_ARCHETYPES = ['逃兵', '打手', '账房', '密探', '护卫', '地痞'] as const;
+
+// ---------------------------------------------------------------------------
+// 权力差事模板
+// ---------------------------------------------------------------------------
+
+type PowerMissionTemplate = {
+  title: string;
+  locationName: string;
+  caseType: MissionPowerContext['caseType'];
+  /** 目标派系（牵连方） */
+  targetFaction: PowerFactionId;
+  /** 简短地点/背景描述 */
+  contextHint: string;
+};
+
+/** 各派系作为发布方时的差事模板列表（同阵营任务） */
+const FACTION_OWN_MISSION_TEMPLATES: Record<PowerFactionId, readonly PowerMissionTemplate[]> = {
+  imperial: [
+    { title: '密旨清查盐引账册', locationName: '户部仓廒', caseType: 'audit', targetFaction: 'silver', contextHint: '内廷密旨，查核盐引流向' },
+    { title: '奉旨押解文书入京', locationName: '通惠河码头', caseType: 'escort', targetFaction: 'imperial', contextHint: '护送廷寄入京，不得有失' },
+    { title: '传递御前密谕', locationName: '皇城西苑', caseType: 'petition', targetFaction: 'imperial', contextHint: '御前差事，只可你知我知' },
+  ],
+  noble: [
+    { title: '替侯府收讨田租债账', locationName: '城东庄园', caseType: 'audit', targetFaction: 'noble', contextHint: '勋贵产业，催讨积欠租粮' },
+    { title: '押运侯府秘密财货', locationName: '崇文门外', caseType: 'escort', targetFaction: 'noble', contextHint: '贵人私货，低调搬运勿声张' },
+    { title: '夜探庄园驱散刁民', locationName: '侯府庄田', caseType: 'raid', targetFaction: 'noble', contextHint: '替侯爷平息庄丁闹事' },
+  ],
+  censorate: [
+    { title: '查核贡院舞弊名册', locationName: '贡院东门', caseType: 'audit', targetFaction: 'censorate', contextHint: '科道差事，核查科考漏题' },
+    { title: '递送弹劾底稿', locationName: '都察院值房', caseType: 'petition', targetFaction: 'censorate', contextHint: '清流奏折，不可落入他人之手' },
+    { title: '暗中调查同僚腐行', locationName: '六科廊房', caseType: 'audit', targetFaction: 'noble', contextHint: '清查勋贵子弟捐官' },
+  ],
+  border: [
+    { title: '押送辽饷过关', locationName: '居庸关外', caseType: 'escort', targetFaction: 'border', contextHint: '边军饷银，一分不得短少' },
+    { title: '夜剿边墙马匪', locationName: '长城烽火台', caseType: 'raid', targetFaction: 'border', contextHint: '扫除边境马匪，保境安民' },
+    { title: '护送军功奏报入京', locationName: '蓟镇大营', caseType: 'escort', targetFaction: 'border', contextHint: '军报入京，须经手无误' },
+  ],
+  silver: [
+    { title: '护送盐引账本', locationName: '盐帮会馆', caseType: 'escort', targetFaction: 'silver', contextHint: '商会差事，账本安全第一' },
+    { title: '追讨织造亏空', locationName: '苏州织造局', caseType: 'audit', targetFaction: 'silver', contextHint: '追回被挪用的织造款项' },
+    { title: '暗中押运私盐', locationName: '运河渡口', caseType: 'smuggle', targetFaction: 'silver', contextHint: '商会生意，切勿声张' },
+  ],
+  underworld: [
+    { title: '香会暗线递信', locationName: '旧城茶馆', caseType: 'petition', targetFaction: 'underworld', contextHint: '秘社暗信，不为外人所知' },
+    { title: '替人灭口封账', locationName: '南城客栈', caseType: 'purge', targetFaction: 'underworld', contextHint: '黑道事，做完就忘' },
+    { title: '走私违禁器械', locationName: '城外荒庙', caseType: 'smuggle', targetFaction: 'underworld', contextHint: '秘密搬运，天知地知' },
+  ],
+};
+
+/** 皇权/中枢发布的高奖励任务（对其他阵营打压） */
+const IMPERIAL_MISSION_TEMPLATES: Record<PowerFactionId, readonly PowerMissionTemplate[]> = {
+  imperial: [
+    { title: '奉旨拿问军功旧党', locationName: '五军都督府', caseType: 'arrest', targetFaction: 'noble', contextHint: '皇命拿问，不得有误' },
+    { title: '密查清流党羽', locationName: '翰林院南门', caseType: 'audit', targetFaction: 'censorate', contextHint: '内廷指令，暗查科道结党' },
+  ],
+  noble: [
+    { title: '奉旨追查走私盐道', locationName: '淮安盐运司', caseType: 'audit', targetFaction: 'silver', contextHint: '皇命清查，盐引流向见底' },
+    { title: '宫廷密令缉拿江湖叛逆', locationName: '西城兵马司', caseType: 'arrest', targetFaction: 'underworld', contextHint: '皇命辑捕，不拘手段' },
+  ],
+  censorate: [
+    { title: '密旨审核边军冒饷', locationName: '兵部档房', caseType: 'audit', targetFaction: 'border', contextHint: '皇命追责，查实边军虚报' },
+    { title: '奉旨抄查勋贵家产', locationName: '勋贵府邸', caseType: 'raid', targetFaction: 'noble', contextHint: '内廷密旨，家产查扣' },
+  ],
+  border: [
+    { title: '奉旨查封私通商路', locationName: '关外货栈', caseType: 'raid', targetFaction: 'silver', contextHint: '皇命封锁，商道断绝' },
+    { title: '皇命清查江湖流寇据点', locationName: '城外荒村', caseType: 'purge', targetFaction: 'underworld', contextHint: '奉旨清剿，不留后患' },
+  ],
+  silver: [
+    { title: '密旨稽查清流贪腐', locationName: '礼部库房', caseType: 'audit', targetFaction: 'censorate', contextHint: '皇命清查，科道实况' },
+    { title: '奉旨抄检边军私库', locationName: '边关驿站', caseType: 'raid', targetFaction: 'border', contextHint: '皇命彻查，边军藏货一律没收' },
+  ],
+  underworld: [
+    { title: '内廷密令除掉眼线', locationName: '城北小院', caseType: 'purge', targetFaction: 'censorate', contextHint: '秘密清除清流安插的线人' },
+    { title: '皇命押送要犯', locationName: '刑部大牢', caseType: 'escort', targetFaction: 'imperial', contextHint: '奉皇命押送，不得有失' },
+  ],
+};
+
+/** 跨阵营任务（发布方打压/竞争其他阵营，奖励波动，牵连最明显） */
+const CROSS_FACTION_MISSION_TEMPLATES: Record<PowerFactionId, readonly PowerMissionTemplate[]> = {
+  imperial: [
+    { title: '截查边军私运物资', locationName: '蓟门关道', caseType: 'raid', targetFaction: 'border', contextHint: '内廷介入，截查边军走私' },
+    { title: '暗中监视商会账房', locationName: '顺天商会', caseType: 'audit', targetFaction: 'silver', contextHint: '内廷耳目，暗中盯梢商会' },
+  ],
+  noble: [
+    { title: '打压清流上疏弹劾', locationName: '通政使司', caseType: 'arrest', targetFaction: 'censorate', contextHint: '截拿弹劾奏章，消灭隐患' },
+    { title: '暗中破坏盐商账册', locationName: '盐商大宅', caseType: 'raid', targetFaction: 'silver', contextHint: '勋贵打压商会，夺盐道控制' },
+  ],
+  censorate: [
+    { title: '弹劾边军走私勾连', locationName: '蓟镇行辕', caseType: 'audit', targetFaction: 'border', contextHint: '清流弹劾，揪出边将劣迹' },
+    { title: '上书揭发江湖秘社', locationName: '刑部大堂', caseType: 'petition', targetFaction: 'underworld', contextHint: '递送弹劾底稿，牵连江湖' },
+  ],
+  border: [
+    { title: '截断商会走私通道', locationName: '关外货运道', caseType: 'raid', targetFaction: 'silver', contextHint: '边军介入，掌控走私路线' },
+    { title: '打压科道监军干预', locationName: '监军行辕', caseType: 'arrest', targetFaction: 'censorate', contextHint: '清除清流监军，边军自主' },
+  ],
+  silver: [
+    { title: '秘密渗透边军粮草供应', locationName: '蓟镇后勤营', caseType: 'smuggle', targetFaction: 'border', contextHint: '商会控粮，把持边军命脉' },
+    { title: '买通勋贵打压竞争对手', locationName: '勋贵中间人', caseType: 'smuggle', targetFaction: 'noble', contextHint: '银库渗透，借刀杀人' },
+  ],
+  underworld: [
+    { title: '暗中破坏勋贵聚会', locationName: '勋贵私宴', caseType: 'raid', targetFaction: 'noble', contextHint: '江湖介入，搅乱贵人聚会' },
+    { title: '截劫清流传递的密信', locationName: '城郊驿道', caseType: 'arrest', targetFaction: 'censorate', contextHint: '秘社手段，截断清流联络' },
+  ],
+};
+
+/**
+ * 根据玩家 powerFaction 确定差事发布阵营，旧存档 fallback 链：
+ * state.player.powerFaction → raceConfig[raceId].defaultFaction → 'imperial'
+ */
+function resolvePlayerFaction(state: GameState): PowerFactionId {
+  if (state.player.powerFaction) {
+    return state.player.powerFaction;
+  }
+  const raceId = state.player.raceId as RaceId;
+  if (RACE_CONFIGS[raceId]?.defaultFaction) {
+    return RACE_CONFIGS[raceId].defaultFaction;
+  }
+  return 'imperial';
+}
 
 /**
  * 酒馆任务发布NPC
@@ -275,12 +400,67 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
     .slice(0, 3);
   const mountMultiplierBp = getCurrentMountMultiplierBp(state.mount, now);
 
+  // 解析玩家所属阵营（含旧存档 fallback）
+  const playerFaction = resolvePlayerFaction(state);
+
   const offers: MissionOffer[] = shuffledDurations.map(({ durationMin }, slotIndex) => {
-    const title = rng.pick(MISSION_TITLES[slotIndex] ?? MISSION_TITLES[0]);
-    const locationName = rng.pick(LOCATION_NAMES);
     const baseDurationSec = durationMin * 60;
     const actualDurationSec = computeActualDurationSec(baseDurationSec, mountMultiplierBp);
     const missionId = `mission_${offerSetId}_${slotIndex}`;
+
+    // -----------------------------------------------------------------------
+    // 权力差事生成：3个任务按阵营角色分配
+    // slot 0: 同阵营任务（奖励普通，牵连低）
+    // slot 1: 皇权/中枢任务（奖励较高，有目标阵营牵连）
+    // slot 2: 跨阵营任务（奖励波动，牵连最明显）
+    // -----------------------------------------------------------------------
+    let powerContext: MissionPowerContext | undefined;
+    let title: string;
+    let locationName: string;
+
+    if (slotIndex === 0) {
+      // 同阵营任务
+      const templates = FACTION_OWN_MISSION_TEMPLATES[playerFaction];
+      const tmpl = rng.pick(templates);
+      title = tmpl.title;
+      locationName = tmpl.locationName;
+      powerContext = {
+        issuerFaction: playerFaction,
+        targetFaction: tmpl.targetFaction,
+        caseType: tmpl.caseType,
+        // 同阵营任务牵连低，给目标阵营加 1-3 疑心
+        suspicionDeltaPreview:
+          tmpl.targetFaction !== playerFaction
+            ? { [tmpl.targetFaction]: 1 }
+            : undefined,
+      };
+    } else if (slotIndex === 1) {
+      // 皇权/中枢任务
+      const imperialTemplates = IMPERIAL_MISSION_TEMPLATES[playerFaction];
+      const tmpl = rng.pick(imperialTemplates);
+      title = tmpl.title;
+      locationName = tmpl.locationName;
+      powerContext = {
+        issuerFaction: 'imperial',
+        targetFaction: tmpl.targetFaction,
+        caseType: tmpl.caseType,
+        // 皇权任务对目标阵营加 2-5 疑心
+        suspicionDeltaPreview: { [tmpl.targetFaction]: rng.int(2, 5) },
+      };
+    } else {
+      // 跨阵营任务
+      const crossTemplates = CROSS_FACTION_MISSION_TEMPLATES[playerFaction];
+      const tmpl = rng.pick(crossTemplates);
+      title = tmpl.title;
+      locationName = tmpl.locationName;
+      powerContext = {
+        issuerFaction: playerFaction,
+        targetFaction: tmpl.targetFaction,
+        caseType: tmpl.caseType,
+        // 跨阵营任务牵连最明显：目标阵营 3-8 疑心
+        suspicionDeltaPreview: { [tmpl.targetFaction]: rng.int(3, 8) },
+      };
+    }
 
     return {
       offerSetId,
@@ -296,6 +476,7 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
       visibleReward: buildVisibleReward(state.player.level, durationMin, slotIndex, offerSetId),
       enemyPreview: buildEnemyPreview(state.player.level, slotIndex, offerSetId),
       generatedAt: now,
+      powerContext,
     };
   });
 
@@ -331,6 +512,7 @@ export function buildActiveMissionView(activeMission: ActiveMission | null, now:
       hasHourglass: activeMission.rewardSnapshot.hourglass > 0,
     },
     mountSnapshot: activeMission.mountSnapshot,
+    powerContext: activeMission.powerContext,
   };
 }
 

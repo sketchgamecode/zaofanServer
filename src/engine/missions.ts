@@ -9,6 +9,7 @@ import type {
   MissionSettlement,
   BattleResultV2,
   PlayerCombatSnapshot,
+  PowerFactionId,
   RewardSnapshot,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
@@ -36,6 +37,11 @@ export type CompleteMissionData = {
   playerDelta: MissionSettlement['playerDelta'];
   nextMissionOffers: GameState['tavern']['missionOffers'];
   tavern: ReturnType<typeof buildTavernSummaryView>;
+  /** 权力结算结果：疑心变化 + 结算后当前疑心池（阶段1新增） */
+  powerResult?: {
+    suspicionDelta: Partial<Record<PowerFactionId, number>>;
+    suspicionAfter: Partial<Record<PowerFactionId, number>>;
+  };
 };
 
 function emptyGrantedReward(): GrantedReward {
@@ -45,6 +51,49 @@ function emptyGrantedReward(): GrantedReward {
     tokens: 0,
     hourglass: 0,
   };
+}
+
+/** 所有已知派系列表，用于 suspicion 补全 */
+const ALL_FACTIONS: ReadonlyArray<PowerFactionId> = [
+  'imperial', 'noble', 'censorate', 'border', 'silver', 'underworld',
+];
+
+/**
+ * 应用权力疑心变化：将 powerContext.suspicionDeltaPreview 加到 state.player.suspicion。
+ * - 如果 suspicion 不存在或缺少某个派系，自动补 0。
+ * - 返回实际 delta 和结算后全量。
+ */
+function applyPowerSuspicion(
+  state: GameState,
+  suspicionDeltaPreview: Partial<Record<PowerFactionId, number>>,
+): { suspicionDelta: Partial<Record<PowerFactionId, number>>; suspicionAfter: Partial<Record<PowerFactionId, number>> } {
+  // 如果旧存档没有 suspicion，就先全部初始化为 0
+  if (!state.player.suspicion) {
+    state.player.suspicion = {};
+  }
+  const suspicion = state.player.suspicion;
+
+  // 补全缺失的派系
+  for (const faction of ALL_FACTIONS) {
+    if (suspicion[faction] === undefined) {
+      suspicion[faction] = 0;
+    }
+  }
+
+  const actualDelta: Partial<Record<PowerFactionId, number>> = {};
+
+  for (const [faction, delta] of Object.entries(suspicionDeltaPreview) as [PowerFactionId, number][]) {
+    if (delta !== 0) {
+      const current = suspicion[faction] ?? 0;
+      const newVal = Math.max(0, current + delta);
+      suspicion[faction] = newVal;
+      actualDelta[faction] = newVal - current;
+    }
+  }
+
+  // 拍一份结算后状态
+  const suspicionAfter: Partial<Record<PowerFactionId, number>> = { ...suspicion };
+  return { suspicionDelta: actualDelta, suspicionAfter };
 }
 
 function buildEnemySnapshot(player: PlayerCombatSnapshot, offer: GameState['tavern']['missionOffers'][number], seed: string): EnemySnapshot {
@@ -188,6 +237,7 @@ function buildCompleteMissionData(
     playerDelta: settlement.playerDelta,
     nextMissionOffers: state.tavern.missionOffers,
     tavern: buildTavernSummaryView(state, now),
+    powerResult: settlement.powerResult,
   };
 }
 
@@ -277,6 +327,8 @@ export function startMission(
     rewardSeed,
     settlementStatus: 'UNSETTLED',
     rewardGranted: false,
+    // 携带 powerContext，确保结算时不丢失
+    powerContext: offer.powerContext,
   };
 
   ctx.state.tavern.thirstSecRemaining -= offer.thirstCostSec;
@@ -317,11 +369,19 @@ export function completeMission(
 
   let grantedReward = emptyGrantedReward();
   let rewardGranted = false;
+  let powerResult: MissionSettlement['powerResult'];
 
   if (battleResult.playerWon) {
     grantedReward = grantRewardSnapshot(ctx.state, activeMission.rewardSnapshot);
     rewardGranted = true;
+
+    // 成功时应用权力疑心变化
+    const suspicionDeltaPreview = activeMission.powerContext?.suspicionDeltaPreview;
+    if (suspicionDeltaPreview && Object.keys(suspicionDeltaPreview).length > 0) {
+      powerResult = applyPowerSuspicion(ctx.state, suspicionDeltaPreview);
+    }
   }
+  // 失败时不修改 suspicion（阶段1设计：失败时不加疑心）
 
   const after = captureResourceSnapshot(ctx.state);
   const settlement: MissionSettlement = {
@@ -336,6 +396,7 @@ export function completeMission(
     canSaveReplay: true,
     replayId: null,
     playerDelta: buildPlayerDelta(before, after),
+    powerResult,
   };
 
   activeMission.settlementStatus = 'SETTLED';
