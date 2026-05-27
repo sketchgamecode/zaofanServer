@@ -69,3 +69,16 @@
 
 ---
 *Last Updated: 2026-05-04*
+
+---
+
+## 7. 权柄总量系统限制 (Power Share Limits)
+
+| 常量名 | 说明 | 数值 |
+| :--- | :--- | :--- |
+| `WORLD_POWER_TOTAL` | 世界权力总量上限 (100.00%) | 10000 |
+| `missionLowRiskTransfer` | 同阵营权力任务结算成功时权柄转移额度 | 1 |
+| `missionHighRiskTransfer` | 跨阵营权力任务结算成功时权柄转移额度 | 2 |
+| `dungeonPurgeTransfer` | 权力副本（蓝玉案）结算胜利时权柄转移额度 | 3 |
+
+*Last Updated: 2026-05-27*

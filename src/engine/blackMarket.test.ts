@@ -123,6 +123,10 @@ function makeState(overrides: Partial<GameState['resources']> = {}): GameState {
       dailyAttemptsUsed: 0,
       lastDailyResetDate: '2026-01-01',
     },
+    world: {
+      status: 'UNINITIALIZED',
+      actors: [],
+    },
   };
 }
 

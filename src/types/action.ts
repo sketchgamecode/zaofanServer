@@ -27,7 +27,11 @@ export type GameActionName =
   | 'GUARD_WORK_CLAIM'
   | 'DUNGEON_FIGHT'
   | 'DEBUG_CHEAT'
-  | 'DEBUG_RESET_SAVE';
+  | 'DEBUG_RESET_SAVE'
+  | 'WORLD_ACTORS_GET_OVERVIEW'
+  | 'WORLD_LOCATIONS_GET_STATUS'
+  | 'WORLD_ACTOR_GET_DETAIL'
+  | 'WORLD_SERVICE_POSITIONS_GET_LIST';
 
 export type GameActionEnvelope = {
   action: string;

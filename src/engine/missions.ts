@@ -11,6 +11,7 @@ import type {
   PlayerCombatSnapshot,
   PowerFactionId,
   RewardSnapshot,
+  PowerTransferResult,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
@@ -18,6 +19,7 @@ import { generateEquipment } from './equipmentGenerator.js';
 import { GameError } from './errors.js';
 import { buildPlayerBattleSide, getTotalAttributes, serverSimulateBattle } from './mathCore.js';
 import { buildPlayerDelta, captureResourceSnapshot, grantExp, grantResource, spendResource } from './resourceService.js';
+import { applyWorldPowerTransfer } from './world.js';
 import { buildTavernSummaryView, generateMissionOffers, getCurrentMountMultiplierBp, getTavernInfo, getTavernStatus, type TavernInfoData } from './tavern.js';
 
 export type StartMissionPayload = {
@@ -39,8 +41,9 @@ export type CompleteMissionData = {
   tavern: ReturnType<typeof buildTavernSummaryView>;
   /** 权力结算结果：疑心变化 + 结算后当前疑心池（阶段1新增） */
   powerResult?: {
-    suspicionDelta: Partial<Record<PowerFactionId, number>>;
-    suspicionAfter: Partial<Record<PowerFactionId, number>>;
+    suspicionDelta?: Partial<Record<PowerFactionId, number>>;
+    suspicionAfter?: Partial<Record<PowerFactionId, number>>;
+    powerTransfer?: PowerTransferResult;
   };
 };
 
@@ -375,10 +378,26 @@ export function completeMission(
     grantedReward = grantRewardSnapshot(ctx.state, activeMission.rewardSnapshot);
     rewardGranted = true;
 
-    // 成功时应用权力疑心变化
-    const suspicionDeltaPreview = activeMission.powerContext?.suspicionDeltaPreview;
-    if (suspicionDeltaPreview && Object.keys(suspicionDeltaPreview).length > 0) {
-      powerResult = applyPowerSuspicion(ctx.state, suspicionDeltaPreview);
+    // 成功时应用权力疑心变化与权柄转移
+    const powerContext = activeMission.powerContext;
+    if (powerContext) {
+      let suspicionResult: ReturnType<typeof applyPowerSuspicion> | undefined;
+      const suspicionDeltaPreview = powerContext.suspicionDeltaPreview;
+      if (suspicionDeltaPreview && Object.keys(suspicionDeltaPreview).length > 0) {
+        suspicionResult = applyPowerSuspicion(ctx.state, suspicionDeltaPreview);
+      }
+
+      const amount = powerContext.issuerFaction === powerContext.targetFaction ? 1 : 2;
+      const powerTransfer = applyWorldPowerTransfer(ctx, {
+        amount,
+        targetFactionId: powerContext.targetFaction,
+        issuerFactionId: powerContext.issuerFaction,
+      });
+
+      powerResult = {
+        ...(suspicionResult ? suspicionResult : {}),
+        powerTransfer,
+      };
     }
   }
   // 失败时不修改 suspicion（阶段1设计：失败时不加疑心）

@@ -1,12 +1,13 @@
 import { DUNGEON_CHAPTERS } from '../data/dungeonTable.js';
 import type { ActionSuccessResponse } from '../types/action.js';
-import type { CombatantSnapshot, PowerFactionId } from '../types/gameState.js';
+import type { CombatantSnapshot, PowerFactionId, PowerTransferResult } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildBattleReplayRecord } from './battleReplayRecords.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
 import { simulateBattleV2 } from './combatSimulator.js';
 import { GameError } from './errors.js';
 import { grantExp, grantResource } from './resourceService.js';
+import { applyWorldPowerTransfer } from './world.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
 
 /** 所有已知派系，用于 suspicion 补全（与 missions.ts 保持一致） */
@@ -109,7 +110,11 @@ export async function dungeonFight(ctx: ActionContext, payload: Record<string, u
 
   const grantedReward = { xp: 0, copper: 0 };
   // 权力结算结果（仅成功且章节有 powerCase 时存在）
-  let powerResult: { suspicionDelta: Partial<Record<PowerFactionId, number>>; suspicionAfter: Partial<Record<PowerFactionId, number>> } | undefined;
+  let powerResult: {
+    suspicionDelta?: Partial<Record<PowerFactionId, number>>;
+    suspicionAfter?: Partial<Record<PowerFactionId, number>>;
+    powerTransfer?: PowerTransferResult;
+  } | undefined;
 
   if (battleResult.playerWon) {
     ctx.state.dungeon.progress[chapter.id] = progress + 1;
@@ -118,10 +123,25 @@ export async function dungeonFight(ctx: ActionContext, payload: Record<string, u
     grantExp(ctx.state, boss.rewardXp);
     grantResource(ctx.state, 'copper', boss.rewardCoins);
 
-    // 阶段2：章节有 powerCase.suspicionDeltaOnWin 时写入疑心值
-    const suspicionDeltaOnWin = chapter.powerCase?.suspicionDeltaOnWin;
-    if (suspicionDeltaOnWin && Object.keys(suspicionDeltaOnWin).length > 0) {
-      powerResult = applyDungeonSuspicion(ctx, suspicionDeltaOnWin);
+    // 阶段2&5：章节有 powerCase 时写入疑心值并转移权柄
+    const powerCase = chapter.powerCase;
+    if (powerCase) {
+      let suspicionResult: ReturnType<typeof applyDungeonSuspicion> | undefined;
+      const suspicionDeltaOnWin = powerCase.suspicionDeltaOnWin;
+      if (suspicionDeltaOnWin && Object.keys(suspicionDeltaOnWin).length > 0) {
+        suspicionResult = applyDungeonSuspicion(ctx, suspicionDeltaOnWin);
+      }
+
+      const powerTransfer = applyWorldPowerTransfer(ctx, {
+        amount: 3,
+        targetFactionIds: powerCase.targetFactions,
+        issuerFactionId: powerCase.issuerFaction,
+      });
+
+      powerResult = {
+        ...(suspicionResult ? suspicionResult : {}),
+        powerTransfer,
+      };
     }
   }
   // 失败时不修改 suspicion（阶段2设计：失败不加疑心）

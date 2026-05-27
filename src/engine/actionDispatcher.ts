@@ -13,7 +13,7 @@ import { refreshBlackMarket, buyAndEquipItem, buyItem, sellItem } from './blackM
 import { arenaFight, arenaGetInfo, arenaRefreshCandidates, arenaSkipCooldown } from './arena.js';
 import { mailDeleteBattleReplay, mailGetBattleReplay, mailGetBattleReplays, mailSaveMissionReplay } from './mail.js';
 import { dungeonFight } from './dungeon.js';
-import { worldActorsGetOverview } from './world.js';
+import { worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList } from './world.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
@@ -54,6 +54,9 @@ const ACTION_HANDLERS: Record<string, Handler> = {
   'MAIL_DELETE_BATTLE_REPLAY': mailDeleteBattleReplay,
   'DUNGEON_FIGHT': dungeonFight,
   'WORLD_ACTORS_GET_OVERVIEW': worldActorsGetOverview,
+  'WORLD_LOCATIONS_GET_STATUS': worldLocationsGetStatus,
+  'WORLD_ACTOR_GET_DETAIL': worldActorGetDetail,
+  'WORLD_SERVICE_POSITIONS_GET_LIST': worldServicePositionsGetList,
 };
 
 export async function dispatchAction(

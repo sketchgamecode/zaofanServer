@@ -321,4 +321,43 @@ describe('现有 dungeon 奖励逻辑不回归', () => {
     const res = await dungeonFight(ctx, { chapterId: 'case_lanyu_purge' });
     expect(res.action).toBe('DUNGEON_FIGHT');
   });
+
+  it('dungeonFight WIN case should transfer 3 points from target factions to player', async () => {
+    const state = makeActiveState();
+    state.attributes.strength = 9999;
+    state.attributes.constitution = 9999;
+    
+    const ctx = makeCtx(state);
+    const res = await dungeonFight(ctx, { chapterId: 'case_lanyu_purge' });
+    
+    if (res.data.result === 'WIN') {
+      const powerTransfer = res.data.powerResult?.powerTransfer;
+      expect(powerTransfer).toBeDefined();
+      expect(powerTransfer.worldPowerTotal).toBe(10000);
+      expect(powerTransfer.actorPowerDelta).toBe(3);
+      expect(powerTransfer.targetActorIds).toBeDefined();
+      expect(powerTransfer.targetActorIds.length).toBeGreaterThan(0);
+      
+      const player = state.world.actors.find(a => a.actorId === `player:${ctx.playerId}`);
+      expect(player).toBeDefined();
+      expect(player!.powerShare).toBe(3);
+      
+      const totalPower = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+      expect(totalPower).toBe(10000);
+    }
+  });
+
+  it('dungeonFight LOSE case should not trigger power transfer', async () => {
+    const state = makeActiveState();
+    state.attributes.strength = 1;
+    state.attributes.constitution = 1;
+    state.attributes.agility = 1;
+    
+    const ctx = makeCtx(state);
+    const res = await dungeonFight(ctx, { chapterId: 'case_lanyu_purge' });
+    
+    if (res.data.result === 'LOSE') {
+      expect(res.data.powerResult).toBeUndefined();
+    }
+  });
 });

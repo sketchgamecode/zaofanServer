@@ -38,7 +38,9 @@ export type GameErrorCode =
   | 'INVALID_RACE'
   | 'INVALID_CLASS'
   | 'INVALID_NICKNAME'
-  | 'INVALID_AVATAR';
+  | 'INVALID_AVATAR'
+  | 'WORLD_PLAYER_ACTOR_NOT_FOUND'
+  | 'WORLD_ACTOR_NOT_FOUND';
 
 export class GameError extends Error {
   public readonly code: GameErrorCode;

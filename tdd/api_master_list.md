@@ -137,14 +137,28 @@
 *   `battleResult`: `BattleResultV2`，用于战斗播放与手动保存酒馆任务回放；不再提供旧 `BattleResult.rounds`。
 *   `grantedReward`: 实际获得的奖励内容。
 *   `playerDelta`: 玩家资源变动前后的对比。
-*   `powerResult?`: 权力结算结果（阶段1新增，成功时才存在）：
+*   `powerResult?`: 权力结算结果（阶段1/5新增，成功时才存在）：
     ```typescript
     {
-      suspicionDelta: Partial<Record<PowerFactionId, number>>; // 本次增加的疑心
-      suspicionAfter: Partial<Record<PowerFactionId, number>>; // 结算后全量疑心
+      suspicionDelta?: Partial<Record<PowerFactionId, number>>; // 本次增加的疑心
+      suspicionAfter?: Partial<Record<PowerFactionId, number>>; // 结算后全量疑心
+      powerTransfer?: {
+        worldPowerTotal: number;
+        actorPowerDelta?: number;
+        issuerFactionPowerDelta?: Partial<Record<PowerFactionId, number>>;
+        targetFactionPowerDelta?: Partial<Record<PowerFactionId, number>>;
+        targetActorIds?: string[];
+        worldPowerAfter?: {
+          byFaction: Array<{
+            faction: PowerFactionId;
+            actorCount: number;
+            powerShare: number;
+          }>;
+        };
+      };
     }
     ```
-    失败时 `powerResult` 不存在，不修改 suspicion。
+    失败时 `powerResult` 不存在，不修改 suspicion 与权柄。
 
 ### BlackMarketView
 `REFRESH_BLACKMARKET` 的返回 data：
@@ -592,14 +606,28 @@ Arena errors:
       suspicionDeltaOnWin?: Partial<Record<PowerFactionId, number>>; // 胜利疑心预览
     }
     ```
-*   `powerResult?`: 权力结算结果（阶段2新增，成功且章节有 powerCase 时存在）：
+*   `powerResult?`: 权力结算结果（阶段2/5新增，成功且章节有 powerCase 时存在）：
     ```typescript
     {
-      suspicionDelta: Partial<Record<PowerFactionId, number>>; // 本次增加的疑心
-      suspicionAfter: Partial<Record<PowerFactionId, number>>; // 结算后全量疑心
+      suspicionDelta?: Partial<Record<PowerFactionId, number>>; // 本次增加的疑心
+      suspicionAfter?: Partial<Record<PowerFactionId, number>>; // 结算后全量疑心
+      powerTransfer?: {
+        worldPowerTotal: number;
+        actorPowerDelta?: number;
+        issuerFactionPowerDelta?: Partial<Record<PowerFactionId, number>>;
+        targetFactionPowerDelta?: Partial<Record<PowerFactionId, number>>;
+        targetActorIds?: string[];
+        worldPowerAfter?: {
+          byFaction: Array<{
+            faction: PowerFactionId;
+            actorCount: number;
+            powerShare: number;
+          }>;
+        };
+      };
     }
     ```
-    失败时 `powerResult` 不存在，不修改 suspicion。
+    失败时 `powerResult` 不存在，不修改 suspicion 与权柄。
 };
 
 type DungeonChapter = {
@@ -741,4 +769,163 @@ curl -X POST http://localhost:3001/api/action/ \
 }
 ```
 
-*Last Updated: 2026-05-26*
+### 8.8 Capital Power Map Status (阶段 4)
+
+### WORLD_LOCATIONS_GET_STATUS
+
+获取京城权力地图中各个地点的状态与聚合数据。
+**Request Payload**: `{}`
+**Response Data**:
+```typescript
+{
+  locations: Array<{
+    locationId: string;
+    name: string;
+    ownerFaction: PowerFactionId;
+    x: number;
+    y: number;
+    unlockLevel: number;
+    services: Array<'missions' | 'shop' | 'dungeon' | 'arena' | 'promotion' | 'intel' | 'estate' | 'stamina'>;
+    connectedLocationIds: string[];
+    travelCostSecBase?: number;
+    actorCount: number;
+    powerShare: number;
+    status: 'locked' | 'open' | 'hostile' | 'favored';
+    playerRelationHint: string;
+    // 旧字段，保留兼容
+    serviceActors: Array<{
+      actorId: string;
+      displayName: string;
+      avatarId: string;
+      faction: PowerFactionId;
+      title: string;
+      level: number;
+      powerShare: number;
+      services: PowerLocationService[];
+    }>;
+    // 新字段：场所职务系统 V1
+    servicePositions: Array<{
+      positionId: string;         // 格式：locationId:service，如 "northern_bureau:missions"
+      locationId: string;
+      title: string;              // 风味化职务头衔，如 "北镇经历司吏"
+      service: PowerLocationService;
+      ownerFaction: PowerFactionId;
+      minLevel: number;           // 等于 location.unlockLevel
+      incomeHint: string;         // 提示文案，第一版只展示，不产生实际收益
+      replaceHint: string;        // 争夺提示文案
+      status: 'bot_held' | 'player_held' | 'vacant' | 'locked';
+      occupant: {
+        actorId: string;
+        kind: 'bot' | 'player';
+        displayName: string;
+        avatarId: string;
+        faction: PowerFactionId;
+        level: number;
+        powerShare: number;
+      };
+    }>;
+  }>;
+}
+```
+
+**场所职务系统说明**:
+- 每个地点的每个 service 对应一个 `servicePosition`。
+- `positionId` 格式为 `locationId:service`。
+- 任职者选择优先级：同 locationId > 同 ownerFaction > 全局兜底，同地点内不重复选用同一 actor。
+- 职务标题使用定制映射表（如"北镇经历司吏"），无定制时退化为服务通用标题（如"差事承办"）。
+- 第一版职务收益/争夺系统仅返回提示文案，不产生实际结算。
+- 世界权柄总量始终守恒为 10000。
+
+*Last Updated: 2026-05-27*
+
+---
+
+### WORLD_ACTOR_GET_DETAIL
+
+按 `actorId` 查询任意角色详情。适用于当前玩家自身、世界角色池中的 bot 以及离线玩家 actor。
+
+**Request Payload**:
+```typescript
+{ actorId: string }
+```
+
+**Response Data**:
+```typescript
+{
+  actorId: string;
+  kind: 'player' | 'bot';
+  character: CharacterInfoView;  // 完全复用前端 CharacterPanel 可消费的结构
+  positions: Array<{
+    positionId: string;       // "locationId:service"
+    locationId: string;
+    locationName: string;     // 中文场所名
+    title: string;            // 职务头衔
+    service: PowerLocationService;
+    serviceLabel: string;     // 中文服务标签（差事/商铺/副本…）
+    ownerFaction: PowerFactionId;
+    ownerLabel: string;       // 中文派系名（皇权内廷/勋贵集团…）
+    incomeHint: string;
+    replaceHint: string;
+    status: 'bot_held' | 'player_held' | 'vacant' | 'locked';
+  }>;
+}
+```
+
+**说明**:
+- 查询当前玩家自身（`player:<playerId>`）：返回完整真实 `CharacterInfoView`。
+- 查询其他 player 类型 actor 或 bot：从 `combatSnapshot` 派生只读 `CharacterInfoView`，资源/背包均为 0/空。
+- `positions` 通过反查全量 `servicePositions` 得到，列出该 actor 当前占据的所有职务。
+- 找不到 actorId 时返回错误码 `WORLD_ACTOR_NOT_FOUND`。
+
+**错误码**:
+- `WORLD_ACTOR_NOT_FOUND`: actorId 为空或不在世界角色池中。
+
+*Last Updated: 2026-05-27*
+
+---
+
+### WORLD_SERVICE_POSITIONS_GET_LIST
+
+列出全部场所职务（皇宫黄册），支持按 `locationId` 和/或 `faction` 过滤。
+
+**Request Payload**:
+```typescript
+{
+  locationId?: string;        // 可选：只返回该地点的职务
+  faction?: PowerFactionId;   // 可选：只返回该派系拥有地点的职务
+}
+```
+
+**Response Data**:
+```typescript
+{
+  positions: Array<{
+    positionId: string;
+    locationId: string;
+    locationName: string;
+    title: string;
+    service: PowerLocationService;
+    serviceLabel: string;     // 差事/商铺/副本/比武/晋升/情报/产业/补给
+    ownerFaction: PowerFactionId;
+    occupant: {
+      actorId: string;
+      kind: 'player' | 'bot';
+      displayName: string;
+      avatarId: string;
+      faction: PowerFactionId;
+      level: number;
+      powerShare: number;
+    };
+    incomeHint: string;
+    replaceHint: string;
+    status: 'bot_held' | 'player_held' | 'vacant' | 'locked';
+  }>;
+}
+```
+
+**说明**:
+- 无过滤参数时返回全部 locations 的所有职务（按 POWER_LOCATIONS 顺序排列）。
+- `locationId` 与 `faction` 可单独或组合使用；不匹配时返回空数组。
+- 前端"皇宫黄册"页面可直接消费此接口，点击 CharacterPortraitCard 后调用 `WORLD_ACTOR_GET_DETAIL` 打开统一 CharacterPanel。
+
+*Last Updated: 2026-05-27*

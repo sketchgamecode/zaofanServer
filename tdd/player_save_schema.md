@@ -315,8 +315,53 @@ export type WorldState = {
 };
 ```
 
-- 地点 ID 包括：`imperial_palace`, `northern_bureau`, `divine_engine_camp`, `censorate`, `noble_mansion`, `border_command`, `salt_merchant_guild`, `weaving_bureau`, `refugee_camp`, `player_inventory`。
-- 第一版生成 260 个 bot，六大派系和 10 个地点均有分布，`powerShare` 总和为 10000。
+- 地点 ID 包括：`imperial_palace`, `northern_bureau`, `divine_engine_camp`, `censorate`, `noble_mansion`, `border_command`, `salt_merchant_guild`, `weaving_bureau`, `refugee_camp`, `player_inventory`, `wine_house`, `bun_shop`, `pleasure_quarter`。
+- 第一版生成 260 个 bot，六大派系和 13 个地点均有分布，`powerShare` 总和为 10000。
 - 旧存档没有 `world` 对象时会自动初始化（`status: 'UNINITIALIZED'`），然后按需冷启动填充 bot。
 
 *Last Updated: 2026-05-26*
+
+## 9. 2026-05-27 Capital Power Map (阶段 4)
+
+### PowerLocation & PowerLocationView
+
+新增 `PowerLocation` 与 `PowerLocationView` 类型，用于返回权力地点网络的状态。
+静态京城权力地点配置包括：
+- `imperial_palace` (皇宫)
+- `northern_bureau` (北镇抚司)
+- `divine_engine_camp` (神机营)
+- `censorate` (都察院)
+- `noble_mansion` (国公府)
+- `border_command` (九边都司)
+- `salt_merchant_guild` (两淮盐商总会)
+- `weaving_bureau` (江南织造局)
+- `refugee_camp` (流民营)
+- `player_inventory` (玩家随身储物空间)
+- `wine_house` (京城酒楼)
+- `bun_shop` (城门包子铺)
+- `pleasure_quarter` (教司坊)
+
+地点连线关系 (`connectedLocationIds`) 构成了京城权力网络。
+地点的状态 (`status`) 动态计算：
+- `locked`: 玩家等级不足。
+- `hostile`: 玩家在地点所有派系的 suspicion 疑心值 >= 50 (未处于 locked 时，敌对状态优先级最高)。
+- `favored`: 玩家所属 faction 与地点的 ownerFaction 相同 (未处于 locked/hostile 时)。
+- `open`: 普通状态。
+
+*Last Updated: 2026-05-27*
+
+## 10. 2026-05-27 World Power Transfer (阶段 5)
+
+### 权柄转移设计与玩家 Actor
+
+- **玩家 Actor 同步**:
+  - 系统会在世界初始化或权力结算时自动同步或在 `world.actors` 池中创建一个特殊的玩家 Actor (`actorId = player:${playerId}`)，其 `kind = 'player'`，初始 `powerShare = 0`。
+  - 该玩家 Actor 会继承玩家当前最新的等级、所属阵营和战斗属性快照，并参与世界 10000 权柄额度的争夺与分配。
+- **权柄守恒转移**:
+  - 任务或副本胜利时，统一调用 `applyWorldPowerTransfer` 函数。
+  - 普通权力任务成功结算后，根据低风险（同阵营 1 点）和高风险（跨阵营 2 点）转移规则，从目标阵营的 Bot Actor 身上扣除对应权柄并累加到玩家 Actor 上。
+  - 清洗副本（蓝玉案）胜利后转移 3 点权柄。
+  - 扣除时按 Bot 当前 `powerShare` 降序迭代扣除，确保任意 Bot 权柄不会被扣成负数。如果目标阵营权柄不足，则从其它阵营 Bot 备用扣除，保证权柄不凭空产生也不凭空消失，总量恒为 10000。
+  - 失败时不会发生转移。
+
+*Last Updated: 2026-05-27*

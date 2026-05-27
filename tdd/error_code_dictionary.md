@@ -96,3 +96,14 @@
 | `INVALID_CLASS` | 无效的职司 ID | 代码级错误，前端核对 PlayerClassId 枚举 |
 | `INVALID_RACE` | 无效的出身 ID | 代码级错误，前端核对 RaceId 枚举 |
 | `INVALID_AVATAR` | 无效的头像 ID | 代码级错误，前端核对头像格式 |
+
+---
+
+## 9. 权力与世界系统 (Power & World Systems)
+
+| ErrorCode | 含义 | 推荐交互策略 |
+| :--- | :--- | :--- |
+| `WORLD_PLAYER_ACTOR_NOT_FOUND` | 世界角色池中未找到与玩家关联的 Actor 节点 | 前端提示“世界地图连接异常，请重试” |
+| `WORLD_ACTOR_NOT_FOUND` | 指定 actorId 不存在于世界角色池中，或 actorId 参数为空 | 前端提示"角色不存在或已离开世界地图" |
+
+*Last Updated: 2026-05-27*

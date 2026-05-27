@@ -270,8 +270,8 @@ describe('COMPLETE_MISSION — suspicion 写入', () => {
     expect(state.player.suspicion!.silver).toBe(4);
     // powerResult 应在响应里
     expect(res.data.powerResult).toBeDefined();
-    expect(res.data.powerResult!.suspicionDelta.silver).toBe(4);
-    expect(res.data.powerResult!.suspicionAfter.silver).toBe(4);
+    expect(res.data.powerResult!.suspicionDelta!.silver).toBe(4);
+    expect(res.data.powerResult!.suspicionAfter!.silver).toBe(4);
   });
 
   it('失败时 suspicion 不应改变', () => {
@@ -374,7 +374,7 @@ describe('SKIP_MISSION — suspicion 写入', () => {
     // suspicion 应该被写入
     expect(state.player.suspicion!.border).toBe(5);
     expect(res.data.powerResult).toBeDefined();
-    expect(res.data.powerResult!.suspicionDelta.border).toBe(5);
+    expect(res.data.powerResult!.suspicionDelta!.border).toBe(5);
   });
 });
 
@@ -421,5 +421,55 @@ describe('现有任务逻辑不回归', () => {
     const ctx = makeCtx(state);
     ctx.state.tavern.activeMission!.endTime = ctx.now - 1;
     expect(() => completeMission(ctx, {})).not.toThrow();
+  });
+
+  it('COMPLETE_MISSION SUCCESS should transfer power based on low/high risk rules', () => {
+    // 1. Same faction: low risk (1 point)
+    const state = makeActiveState({
+      powerFaction: 'border',
+    });
+    setupMissionAndAdvanceTime(state);
+    state.tavern.activeMission!.powerContext = {
+      issuerFaction: 'border',
+      targetFaction: 'border',
+      caseType: 'raid',
+      suspicionDeltaPreview: {},
+    };
+    state.tavern.activeMission!.enemySnapshot.combatStats.hp = 1;
+    state.tavern.activeMission!.enemySnapshot.combatStats.damageMin = 0;
+    state.tavern.activeMission!.enemySnapshot.combatStats.damageMax = 0;
+    state.tavern.activeMission!.playerCombatSnapshot.combatStats.hp = 9999;
+
+    const ctx = makeCtx(state);
+    ctx.state.tavern.activeMission!.endTime = ctx.now - 1;
+    const res = completeMission(ctx, {});
+    
+    expect(res.data.powerResult).toBeDefined();
+    expect(res.data.powerResult!.powerTransfer).toBeDefined();
+    expect(res.data.powerResult!.powerTransfer!.actorPowerDelta).toBe(1);
+
+    // 2. Cross faction: high risk (2 points)
+    const state2 = makeActiveState({
+      powerFaction: 'border',
+    });
+    setupMissionAndAdvanceTime(state2);
+    state2.tavern.activeMission!.powerContext = {
+      issuerFaction: 'border',
+      targetFaction: 'silver',
+      caseType: 'raid',
+      suspicionDeltaPreview: {},
+    };
+    state2.tavern.activeMission!.enemySnapshot.combatStats.hp = 1;
+    state2.tavern.activeMission!.enemySnapshot.combatStats.damageMin = 0;
+    state2.tavern.activeMission!.enemySnapshot.combatStats.damageMax = 0;
+    state2.tavern.activeMission!.playerCombatSnapshot.combatStats.hp = 9999;
+
+    const ctx2 = makeCtx(state2);
+    ctx2.state.tavern.activeMission!.endTime = ctx2.now - 1;
+    const res2 = completeMission(ctx2, {});
+    
+    expect(res2.data.powerResult).toBeDefined();
+    expect(res2.data.powerResult!.powerTransfer).toBeDefined();
+    expect(res2.data.powerResult!.powerTransfer!.actorPowerDelta).toBe(2);
   });
 });

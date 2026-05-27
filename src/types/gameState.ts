@@ -467,6 +467,21 @@ export type ActiveMission = {
   powerContext?: MissionPowerContext;
 };
 
+export type PowerTransferResult = {
+  worldPowerTotal: number;
+  actorPowerDelta?: number;
+  issuerFactionPowerDelta?: Partial<Record<PowerFactionId, number>>;
+  targetFactionPowerDelta?: Partial<Record<PowerFactionId, number>>;
+  targetActorIds?: string[];
+  worldPowerAfter?: {
+    byFaction: Array<{
+      faction: PowerFactionId;
+      actorCount: number;
+      powerShare: number;
+    }>;
+  };
+};
+
 export type MissionSettlement = {
   missionId: string;
   offerSetId: string;
@@ -479,10 +494,11 @@ export type MissionSettlement = {
   canSaveReplay?: boolean;
   replayId?: string | null;
   playerDelta: PlayerDelta;
-  /** 权力结算结果：疑心变化 + 结算后值（阶段1新增） */
+  /** 权力结算结果：疑心变化 + 权柄转移 + 结算后值（阶段1/5新增） */
   powerResult?: {
-    suspicionDelta: Partial<Record<PowerFactionId, number>>;
-    suspicionAfter: Partial<Record<PowerFactionId, number>>;
+    suspicionDelta?: Partial<Record<PowerFactionId, number>>;
+    suspicionAfter?: Partial<Record<PowerFactionId, number>>;
+    powerTransfer?: PowerTransferResult;
   };
 };
 
@@ -596,6 +612,117 @@ export type WorldActor = {
 export type WorldState = {
   status: 'UNINITIALIZED' | 'ACTIVE';
   actors: WorldActor[];
+};
+
+export type PowerLocationService = 'missions' | 'shop' | 'dungeon' | 'arena' | 'promotion' | 'intel' | 'estate' | 'stamina';
+
+export type PowerLocation = {
+  locationId: string;
+  name: string;
+  ownerFaction: PowerFactionId;
+  x: number;
+  y: number;
+  unlockLevel: number;
+  services: PowerLocationService[];
+  connectedLocationIds: string[];
+};
+
+export type PowerLocationStatus = 'locked' | 'open' | 'hostile' | 'favored';
+
+export type ServicePositionStatus = 'bot_held' | 'player_held' | 'vacant' | 'locked';
+
+export type ServicePositionView = {
+  positionId: string;
+  locationId: string;
+  title: string;
+  service: PowerLocationService;
+  ownerFaction: PowerFactionId;
+  minLevel: number;
+  incomeHint: string;
+  replaceHint: string;
+  status: ServicePositionStatus;
+  occupant: {
+    actorId: string;
+    kind: 'bot' | 'player';
+    displayName: string;
+    avatarId: string;
+    faction: PowerFactionId;
+    level: number;
+    powerShare: number;
+  };
+};
+
+export type PowerLocationView = {
+  locationId: string;
+  name: string;
+  ownerFaction: PowerFactionId;
+  x: number;
+  y: number;
+  unlockLevel: number;
+  services: PowerLocationService[];
+  connectedLocationIds: string[];
+  travelCostSecBase?: number;
+  actorCount: number;
+  powerShare: number;
+  status: PowerLocationStatus;
+  playerRelationHint: string;
+  serviceActors: Array<{
+    actorId: string;
+    displayName: string;
+    avatarId: string;
+    faction: PowerFactionId;
+    title: string;
+    level: number;
+    powerShare: number;
+    services: PowerLocationService[];
+  }>;
+  servicePositions: ServicePositionView[];
+};
+
+/** 任职信息摘要：在 WORLD_ACTOR_GET_DETAIL 的 positions 数组中使用 */
+export type ActorPositionSummary = {
+  positionId: string;
+  locationId: string;
+  locationName: string;
+  title: string;
+  service: PowerLocationService;
+  serviceLabel: string;
+  ownerFaction: PowerFactionId;
+  ownerLabel: string;
+  incomeHint: string;
+  replaceHint: string;
+  status: ServicePositionStatus;
+};
+
+/** WORLD_ACTOR_GET_DETAIL 返回结构 */
+export type WorldActorDetailView = {
+  actorId: string;
+  kind: 'player' | 'bot';
+  character: CharacterInfoView;
+  positions: ActorPositionSummary[];
+};
+
+/** WORLD_SERVICE_POSITIONS_GET_LIST 单条职位记录 */
+export type WorldServicePositionListItem = {
+  positionId: string;
+  locationId: string;
+  locationName: string;
+  title: string;
+  service: PowerLocationService;
+  serviceLabel: string;
+  ownerFaction: PowerFactionId;
+  occupant: {
+    actorId: string;
+    kind: 'player' | 'bot';
+    displayName: string;
+    avatarId: string;
+    faction: PowerFactionId;
+    level: number;
+    powerShare: number;
+  };
+  incomeHint: string;
+  replaceHint: string;
+  status: ServicePositionStatus;
 };
 
 export type GameState = {
