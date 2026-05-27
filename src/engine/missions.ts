@@ -12,12 +12,15 @@ import type {
   PowerFactionId,
   RewardSnapshot,
   PowerTransferResult,
+  MissionTargetActorPreview,
+  WorldActor,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
 import { generateEquipment } from './equipmentGenerator.js';
 import { GameError } from './errors.js';
-import { buildPlayerBattleSide, getTotalAttributes, serverSimulateBattle } from './mathCore.js';
+import { CLASS_CONFIG } from './combatConfig.js';
+import { MathCore, buildPlayerBattleSide, getTotalAttributes, serverSimulateBattle } from './mathCore.js';
 import { buildPlayerDelta, captureResourceSnapshot, grantExp, grantResource, spendResource } from './resourceService.js';
 import { applyWorldPowerTransfer } from './world.js';
 import { buildTavernSummaryView, generateMissionOffers, getCurrentMountMultiplierBp, getTavernInfo, getTavernStatus, type TavernInfoData } from './tavern.js';
@@ -45,6 +48,16 @@ export type CompleteMissionData = {
     suspicionAfter?: Partial<Record<PowerFactionId, number>>;
     powerTransfer?: PowerTransferResult;
   };
+  /** 任务目标世界角色预览（阶段6新增） */
+  targetActor?: MissionTargetActorPreview;
+  // 任务发布场所来源（任务发布场所统一化 V1 新增）
+  sourceLocationId?: string;
+  sourceLocationName?: string;
+  sourcePositionId?: string;
+  issuerActorId?: string;
+  issuerDisplayName?: string;
+  issuerTitle?: string;
+  issuerFaction?: PowerFactionId;
 };
 
 function emptyGrantedReward(): GrantedReward {
@@ -125,6 +138,78 @@ function buildEnemySnapshot(player: PlayerCombatSnapshot, offer: GameState['tave
       armor: Math.max(0, Math.floor(player.combatStats.armor * armorRatioBp / 10000)),
       damageMin: Math.max(1, Math.floor(player.combatStats.damageMin * damageRatioBp / 10000)),
       damageMax: Math.max(2, Math.floor(player.combatStats.damageMax * damageRatioBp / 10000)),
+      critChanceBp,
+      dodgeChanceBp,
+    },
+    enemyPowerRatioBp: damageRatioBp,
+  };
+}
+
+function buildEnemySnapshotFromTargetActor(
+  player: PlayerCombatSnapshot,
+  targetActor: WorldActor,
+  offer: GameState['tavern']['missionOffers'][number],
+  seed: string
+): EnemySnapshot {
+  const rng = createSeededRandom(`${seed}:enemy`);
+  const hpRatioBp = rng.int(8600, 9400);
+  const damageRatioBp = rng.int(8400, 9300);
+  const armorRatioBp = rng.int(7000, 9000);
+
+  const level = targetActor.level;
+  const classId = targetActor.classId;
+
+  const attributes = { ...targetActor.combatSnapshot.attributes };
+  // If bot attributes are the default 10s, scale them appropriately for level
+  if (targetActor.kind === 'bot' && attributes.strength === 10 && attributes.intelligence === 10 && level > 1) {
+    const base = 8 + level * 2;
+    attributes.strength = base;
+    attributes.intelligence = base;
+    attributes.agility = base;
+    attributes.constitution = Math.floor(base * 0.85);
+    attributes.luck = Math.floor(base * 0.45);
+    const mainStat = CLASS_CONFIG[classId].mainStat;
+    attributes[mainStat] = Math.floor(base * 1.25);
+  }
+
+  // Calculate HP
+  const baseHp = MathCore.getMaxHP(attributes.constitution, level, classId);
+
+  // Calculate armor
+  let baseArmor = targetActor.combatSnapshot.combatStats.armor;
+  if (targetActor.kind === 'bot' || baseArmor <= 10) {
+    baseArmor = Math.max(10, level * 10);
+  }
+
+  // Calculate damage
+  let baseDamageMin = targetActor.combatSnapshot.combatStats.damageMin;
+  let baseDamageMax = targetActor.combatSnapshot.combatStats.damageMax;
+  if (targetActor.kind === 'bot' || (baseDamageMin === 5 && baseDamageMax === 10)) {
+    baseDamageMin = Math.max(1, Math.floor(level * 2.2));
+    baseDamageMax = Math.max(baseDamageMin + 1, Math.floor(level * 3.8));
+  }
+
+  const critChanceBp = Math.floor(MathCore.getCritChance(attributes.luck, level) * 10000);
+  const dodgeChanceBp = CLASS_CONFIG[classId].dodgeChanceBp || undefined;
+
+  return {
+    enemyId: targetActor.actorId,
+    name: targetActor.displayName,
+    level,
+    classId,
+    avatarId: offer.targetActor?.avatarId || 'avatar_placeholder_000',
+    attributes: {
+      strength: Math.max(1, Math.floor(attributes.strength * hpRatioBp / 10000)),
+      intelligence: Math.max(1, Math.floor(attributes.intelligence * hpRatioBp / 10000)),
+      agility: Math.max(1, Math.floor(attributes.agility * damageRatioBp / 10000)),
+      constitution: Math.max(1, Math.floor(attributes.constitution * hpRatioBp / 10000)),
+      luck: Math.max(1, Math.floor(attributes.luck * 9000 / 10000)),
+    },
+    combatStats: {
+      hp: Math.max(8, Math.floor(baseHp * hpRatioBp / 10000)),
+      armor: Math.max(0, Math.floor(baseArmor * armorRatioBp / 10000)),
+      damageMin: Math.max(1, Math.floor(baseDamageMin * damageRatioBp / 10000)),
+      damageMax: Math.max(2, Math.floor(baseDamageMax * damageRatioBp / 10000)),
       critChanceBp,
       dodgeChanceBp,
     },
@@ -241,6 +326,15 @@ function buildCompleteMissionData(
     nextMissionOffers: state.tavern.missionOffers,
     tavern: buildTavernSummaryView(state, now),
     powerResult: settlement.powerResult,
+    targetActor: settlement.targetActor,
+    // 来源字段
+    sourceLocationId: settlement.sourceLocationId,
+    sourceLocationName: settlement.sourceLocationName,
+    sourcePositionId: settlement.sourcePositionId,
+    issuerActorId: settlement.issuerActorId,
+    issuerDisplayName: settlement.issuerDisplayName,
+    issuerTitle: settlement.issuerTitle,
+    issuerFaction: settlement.issuerFaction,
   };
 }
 
@@ -300,7 +394,18 @@ export function startMission(
   const playerCombatSnapshot = buildPlayerCombatSnapshot(ctx.state);
   const combatSeed = `combat_${ctx.playerId}_${offer.missionId}_${ctx.now}`;
   const rewardSeed = `reward_${ctx.playerId}_${offer.missionId}_${ctx.now}`;
-  const enemySnapshot = buildEnemySnapshot(playerCombatSnapshot, offer, combatSeed);
+
+  let enemySnapshot: EnemySnapshot;
+  const targetActor = offer.targetActor && ctx.state.world?.actors
+    ? ctx.state.world.actors.find((a) => a.actorId === offer.targetActor!.actorId)
+    : undefined;
+
+  if (targetActor) {
+    enemySnapshot = buildEnemySnapshotFromTargetActor(playerCombatSnapshot, targetActor, offer, combatSeed);
+  } else {
+    enemySnapshot = buildEnemySnapshot(playerCombatSnapshot, offer, combatSeed);
+  }
+
   const rewardSnapshot = buildRewardSnapshot(ctx.state, offer, rewardSeed);
   const mountTimeMultiplierBp = getCurrentMountMultiplierBp(ctx.state.mount, ctx.now);
 
@@ -332,6 +437,16 @@ export function startMission(
     rewardGranted: false,
     // 携带 powerContext，确保结算时不丢失
     powerContext: offer.powerContext,
+    // 携带 targetActor，从 offer 带过来
+    targetActor: offer.targetActor,
+    // 来源字段
+    sourceLocationId: offer.sourceLocationId,
+    sourceLocationName: offer.sourceLocationName,
+    sourcePositionId: offer.sourcePositionId,
+    issuerActorId: offer.issuerActorId,
+    issuerDisplayName: offer.issuerDisplayName,
+    issuerTitle: offer.issuerTitle,
+    issuerFaction: offer.issuerFaction,
   };
 
   ctx.state.tavern.thirstSecRemaining -= offer.thirstCostSec;
@@ -392,6 +507,7 @@ export function completeMission(
         amount,
         targetFactionId: powerContext.targetFaction,
         issuerFactionId: powerContext.issuerFaction,
+        targetActorId: activeMission.targetActor?.actorId,
       });
 
       powerResult = {
@@ -416,6 +532,15 @@ export function completeMission(
     replayId: null,
     playerDelta: buildPlayerDelta(before, after),
     powerResult,
+    targetActor: activeMission.targetActor,
+    // 来源字段
+    sourceLocationId: activeMission.sourceLocationId,
+    sourceLocationName: activeMission.sourceLocationName,
+    sourcePositionId: activeMission.sourcePositionId,
+    issuerActorId: activeMission.issuerActorId,
+    issuerDisplayName: activeMission.issuerDisplayName,
+    issuerTitle: activeMission.issuerTitle,
+    issuerFaction: activeMission.issuerFaction,
   };
 
   activeMission.settlementStatus = 'SETTLED';

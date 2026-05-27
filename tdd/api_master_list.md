@@ -95,8 +95,8 @@
 | `UPGRADE_ATTRIBUTE` | 消耗铜钱升级属性 | `{"attribute": "strength"}` | `CharacterInfoView` |
 | `EQUIP_ITEM` | 穿戴背囊中的装备 | `{"itemId": "item_uuid"}` | `CharacterInfoView` |
 | `UNEQUIP_ITEM` | 卸下已穿戴的装备 | `{"slot": "head"}` | `CharacterInfoView` |
-| `TAVERN_GET_INFO` | 获取酒馆状态和任务列表 | `{}` | `TavernInfoData` |
-| `GENERATE_MISSIONS` | 强制重新生成可选任务 | `{}` | `TavernInfoData` |
+| `TAVERN_GET_INFO` | 获取酒馆状态和任务列表 | `{"locationId?: "northern_bureau", "servicePositionId"?: "northern_bureau:missions", "issuerActorId"?: "actor_uuid"}` | `TavernInfoData` |
+| `GENERATE_MISSIONS` | 强制重新生成可选任务 | `{"locationId?: "northern_bureau", "servicePositionId"?: "northern_bureau:missions", "issuerActorId"?: "actor_uuid"}` | `TavernInfoData` |
 | `TAVERN_DRINK` | 消耗令牌喝啤酒（增加体力）| `{}` | `TavernInfoData` |
 | `START_MISSION` | 开始一个酒馆任务 | `{"missionId": "id"}` | `TavernInfoData` |
 | `COMPLETE_MISSION` | 结算当前已完成的任务 | `{}` | `CompleteMissionData` |
@@ -215,12 +215,29 @@ type MissionPowerContext = {
 ```
 
 说明：
+- `MissionOffer`、`ActiveMissionView` 与 `CompleteMissionData`（结算）均扩展了 7 个可选的来源字段，用以支持场所发差事（任务发布场所统一化 V1）：
+  - `sourceLocationId?: string;`
+  - `sourceLocationName?: string;`
+  - `sourcePositionId?: string;`
+  - `issuerActorId?: string;`
+  - `issuerDisplayName?: string;`
+  - `issuerTitle?: string;`
+  - `issuerFaction?: PowerFactionId;`
 - `MissionOffer.powerContext?` 在任务列表中携带此字段。
+- `MissionOffer.targetActor?` 在任务列表中携带目标角色预览。
 - `ActiveMissionView.powerContext?` 在任务进行中也返回此字段。
-- 任务生成规则：
-  - **slot 0（同阵营）**：`issuerFaction = 玩家所属派系`，牵连低（`suspicionDeltaPreview` ≤ 1）。
-  - **slot 1（皇权中枢）**：`issuerFaction = 'imperial'`，奖励较高，`suspicionDeltaPreview` 2-5。
-  - **slot 2（跨阵营）**：`issuerFaction = 玩家所属派系`，牵连最明显，`suspicionDeltaPreview` 3-8。
+- `ActiveMissionView.targetActor?` 在任务进行中也返回目标角色预览。
+- 任务生成规则（扩展支持地点 `locationId` 模式）：
+  - **常规（不传 locationId）**：基于玩家自身派系生成差事。
+  - **地点（传入 locationId）**：
+    - 校验地点是否支持 `missions` 服务，若不支持抛出 `LOCATION_MISSIONS_NOT_AVAILABLE` 错误。
+    - 以该地点的 `ownerFaction` 代替玩家所属派系作为 `baseFaction`，解析获得该职务的任职 occupant actor 作为 `issuerActorId` 等来源字段。
+    - 生成风味标题与描述，例如：北镇抚司诏狱、都察院查账等。
+    - `powerContext.issuerFaction` 会设为该地点的 `ownerFaction`，确保最终结算权柄按该场所的势力参与扣减与转移。
+  - **slot 0（同阵营）**：`issuerFaction = baseFaction`，牵连低（`suspicionDeltaPreview` ≤ 1）。
+  - **slot 1（皇权中枢）**：`issuerFaction = baseFaction`（若有 locationId）或 `'imperial'`，奖励较高，`suspicionDeltaPreview` 2-5。
+  - **slot 2（跨阵营）**：`issuerFaction = baseFaction`，牵连最明显，`suspicionDeltaPreview` 3-8。
+  - 生成任务时，会根据 `MissionPowerContext.targetFaction` 从 `world.actors` 筛选出一个目标 actor 绑定至 `targetActor` 字段，一经生成即锁定，后续战斗和结算均基于该固定目标。
 - 旧存档无 `powerFaction` 时，fallback 链：`raceId → RACE_CONFIGS[raceId].defaultFaction → 'imperial'`。
 
 ### DungeonChapter (副本章节) — 阶段2新增字段

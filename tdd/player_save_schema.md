@@ -86,16 +86,29 @@
 *   `activeMission`: `ActiveMission | null` - 当前进行中的任务。阶段1起含 `powerContext`，与对应 offer 一致。
 *   `lastSettlement`: `MissionSettlement | null` - 上一个任务的结算快照（用于前端展示战斗结果）。
 
-#### MissionOffer 阶段1增量字段
+#### MissionOffer 阶段1增量、阶段6增量及任务发布场所统一化 V1 字段
 *   `powerContext?`: `MissionPowerContext` - 权力差事上下文（可选，阶段1新增）。
+*   `targetActor?`: `MissionTargetActorPreview` - 绑定的具体世界目标角色（可选，阶段6新增）。
+*   `sourceLocationId?`: `string` - 发布场所地点 ID（可选，任务发布场所统一化 V1 新增）。
+*   `sourceLocationName?`: `string` - 发布场所地点名称（可选，任务发布场所统一化 V1 新增）。
+*   `sourcePositionId?`: `string` - 职务职位 ID（可选，任务发布场所统一化 V1 新增）。
+*   `issuerActorId?`: `string` - 职务担任者世界角色 ID（可选，任务发布场所统一化 V1 新增）。
+*   `issuerDisplayName?`: `string` - 职务担任者显示姓名（可选，任务发布场所统一化 V1 新增）。
+*   `issuerTitle?`: `string` - 职务头衔名称（可选，任务发布场所统一化 V1 新增）。
+*   `issuerFaction?`: `PowerFactionId` - 场所所属派系 ID（可选，任务发布场所统一化 V1 新增）。
 
-#### ActiveMission 阶段1增量字段
+#### ActiveMission 阶段1增量、阶段6增量及任务发布场所统一化 V1 字段
 *   `powerContext?`: `MissionPowerContext` - 从对应 MissionOffer 携带，确保结算时不丢失。
+*   `targetActor?`: `MissionTargetActorPreview` - 绑定的具体世界目标角色，从 Offer 携带以确保稳定（可选，阶段6新增）。
+*   以及上述 7 个来源字段（从 Offer 携带，用于在任务执行和结算中透传与展示）。
 
-#### MissionSettlement 阶段1增量字段
+#### MissionSettlement 阶段1增量、阶段6增量及任务发布场所统一化 V1 字段
 *   `powerResult?`: 结算时的权力结果（阶段1新增，成功时才存在）：
     *   `suspicionDelta`: 本次增加的疑心量。
     *   `suspicionAfter`: 结算后全量疑心。
+    *   `powerTransfer`: 权柄转移详细结果（阶段5新增）。
+*   `targetActor?`: `MissionTargetActorPreview` - 本次任务绑定的具体目标角色预览，成功/失败均包含（可选，阶段6新增）。
+*   以及上述 7 个来源字段（从 ActiveMission 携带，用于结算历史数据记录）。
 
 ---
 

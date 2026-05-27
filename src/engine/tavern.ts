@@ -6,12 +6,14 @@ import type {
   GameState,
   MissionOffer,
   MissionPowerContext,
+  MissionTargetActorPreview,
   MountState,
   PowerFactionId,
   RaceId,
   VisibleReward,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
+import { selectMissionTargetActor, POWER_LOCATIONS, buildServicePositions } from './world.js';
 import { GameError } from './errors.js';
 import { createSeededRandom } from '../lib/rng.js';
 import { spendResource } from './resourceService.js';
@@ -44,6 +46,16 @@ export type ActiveMissionView = {
   mountSnapshot: ActiveMission['mountSnapshot'];
   /** 权力集团差事上下文（阶段1新增） */
   powerContext?: MissionPowerContext;
+  /** 任务目标世界角色（阶段6新增） */
+  targetActor?: MissionTargetActorPreview;
+  // 任务发布场所来源（任务发布场所统一化 V1 新增）
+  sourceLocationId?: string;
+  sourceLocationName?: string;
+  sourcePositionId?: string;
+  issuerActorId?: string;
+  issuerDisplayName?: string;
+  issuerTitle?: string;
+  issuerFaction?: PowerFactionId;
 };
 
 export type TavernInfoData = {
@@ -379,9 +391,82 @@ function buildOfferSetId(playerId: string, offerSeq: number, dateStr: string): s
   return `offer_${playerId}_${dateStr}_${offerSeq}`;
 }
 
-export function generateMissionOffers(state: GameState, now: number): MissionOffer[] {
+const LOCATION_MISSION_TEMPLATES: Record<string, Array<{ title: string; desc: string }>> = {
+  northern_bureau: [
+    { title: '诏狱严审重犯', desc: '奉命前往北镇抚司诏狱，严加审讯新收押的重要案犯，获取口供。' },
+    { title: '密查百官行迹', desc: '密查京中官员暗地往来，抄录其私下会面名单与密信。' },
+    { title: '缉拿潜逃钦犯', desc: '根据密报，前往嫌犯藏身处进行雷霆缉拿，押解回北镇抚司。' },
+    { title: '抄没违禁私财', desc: '奉旨查抄涉案府邸，将其隐匿的非法财物登记造册并予抄没。' },
+  ],
+  censorate: [
+    { title: '巡按地方清查账册', desc: '奉都察院差遣，对地方州县的钱粮账目进行严密查账，防范贪墨。' },
+    { title: '撰拟折草弹劾权贵', desc: '搜集百官不法证据，在都察院撰写弹劾奏折，纠弹不法勋贵。' },
+    { title: '巡按御史微服私访', desc: '作为巡按随从密查民间疾苦与地方官绅勾结，搜集第一手证言。' },
+    { title: '清查科道舞弊案', desc: '核查贡院试卷与考官往来书信，彻查科场舞弊线索。' },
+  ],
+  divine_engine_camp: [
+    { title: '押运新型神机火器', desc: '护送神机营研制的最新火器至西郊靶场，严防中途被截。' },
+    { title: '追查失窃军需火药', desc: '神机营火药库部分黑火药流失，奉命暗中追查私贩火药的内鬼。' },
+    { title: '整饬军械修造工坊', desc: '监视神机营军械修造工匠，严查偷工减料与私造火器的行径。' },
+  ],
+  border_command: [
+    { title: '查办边军粮饷克扣', desc: '九边饷银屡被克扣，前往边关都司查办冒领粮饷的贪将。' },
+    { title: '追缉军户逃籍私贩', desc: '清查逃亡军户，防范其勾结塞外私贩，将其悉数捕回。' },
+    { title: '平息边镇聚众械斗', desc: '边境屯军与当地豪强发生恶性械斗，代表都司前往弹压平息。' },
+  ],
+  refugee_camp: [
+    { title: '调解街面流民纠纷', desc: '流民营附近发生地痞抢夺地盘冲突，前往平息街面纠纷。' },
+    { title: '暗中跑腿打探风声', desc: '潜入流民营深处，跑腿买通眼线，打听京城各方势力的动向。' },
+    { title: '盘查无帖黑户流民', desc: '配合官府在流民营周遭盘查无路引黑户，防范盗匪潜伏。' },
+  ],
+  bun_shop: [
+    { title: '包子铺街面纠纷调解', desc: '城门包子铺前发生争执，前去调解纠纷并探听市井小道消息。' },
+    { title: '包子铺接头跑腿打探', desc: '在城门包子铺与眼线接头，跑腿传递绝密市井口信。' },
+    { title: '暗中盘查店铺黑户', desc: '包子铺常有行脚商人歇脚，前去暗中盘查可疑无帖人员。' },
+  ],
+  salt_merchant_guild: [
+    { title: '核查两淮盐税账册', desc: '协助总会核对本季盐引与税银账册，清查私自漏报的税项。' },
+    { title: '密查私盐夹带走私', desc: '商税重地，奉命暗查夹带走私盐货的行商，查扣无引私盐。' },
+    { title: '清理商会往来违禁账目', desc: '暗中核对盐商与朝中达官显贵的往来账目，剔除隐患账册。' },
+  ],
+  weaving_bureau: [
+    { title: '催收江南织造商税', desc: '前往江南织造局催收拖欠的贡缎与商税，核实官商勾结漏税。' },
+    { title: '清查违禁私货染料', desc: '织造工坊出现大批来源不明的私货染料，前去查封并讯问来源。' },
+    { title: '彻查织造内耗账目', desc: '江南织造局账目亏空严重，奉命彻查内部中饱私囊的管事。' },
+  ],
+};
+
+function generateLocationBasedTitleAndDescription(
+  locationId: string,
+  caseType: string,
+  slotIndex: number,
+  _rng: ReturnType<typeof createSeededRandom>,
+): { title: string; desc: string } {
+  const defaultTemplates = [
+    { title: '探查京城隐秘', desc: '受托前往指定地点，暗中查探可疑行径，搜集情报。' },
+    { title: '护送重要人员', desc: '奉命护送该处的线人或财物前往安全地点，确保沿途安全。' },
+    { title: '解决突发争端', desc: '出面调解此地发生的利益冲突或武装摩擦，平息事态。' },
+  ];
+
+  const list = LOCATION_MISSION_TEMPLATES[locationId] || defaultTemplates;
+  return list[slotIndex % list.length];
+}
+
+export function generateMissionOffers(
+  state: GameState,
+  now: number,
+  locationId?: string,
+  servicePositionId?: string,
+  issuerActorId?: string,
+): MissionOffer[] {
   if (getTavernStatus(state, now) !== 'IDLE') {
     throw new GameError('INVALID_TAVERN_STATE', 'Cannot generate mission offers while a mission is active.');
+  }
+
+  // Clear offers if requested location is different from existing offers
+  const existingOffer = state.tavern.missionOffers[0];
+  if (existingOffer && existingOffer.sourceLocationId !== locationId) {
+    state.tavern.missionOffers = [];
   }
 
   if (state.tavern.missionOffers.length > 0) {
@@ -403,6 +488,46 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
   // 解析玩家所属阵营（含旧存档 fallback）
   const playerFaction = resolvePlayerFaction(state);
 
+  // 解析场所来源数据
+  let loc: any = undefined;
+  let sourceLocationId: string | undefined = undefined;
+  let sourceLocationName: string | undefined = undefined;
+  let sourcePositionId: string | undefined = undefined;
+  let resolvedIssuerActorId: string | undefined = undefined;
+  let issuerDisplayName: string | undefined = undefined;
+  let issuerTitle: string | undefined = undefined;
+  let issuerFaction: PowerFactionId | undefined = undefined;
+
+  if (locationId) {
+    loc = POWER_LOCATIONS.find(l => l.locationId === locationId);
+    if (!loc) {
+      throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+    }
+    if (!loc.services.includes('missions')) {
+      throw new GameError('LOCATION_MISSIONS_NOT_AVAILABLE', `Missions are not available at ${loc.name}.`);
+    }
+
+    const actionCtx: ActionContext = {
+      playerId,
+      now,
+      state,
+      dirty: false,
+      markDirty: () => {}
+    };
+    const positions = buildServicePositions(loc, state.world.actors, actionCtx, playerId);
+    const pos = positions.find(p => p.service === 'missions');
+
+    sourceLocationId = loc.locationId;
+    sourceLocationName = loc.name;
+    sourcePositionId = pos?.positionId;
+    resolvedIssuerActorId = pos?.occupant.actorId;
+    issuerDisplayName = pos?.occupant.displayName;
+    issuerTitle = pos?.title;
+    issuerFaction = loc.ownerFaction;
+  }
+
+  const baseFaction: PowerFactionId = locationId ? (loc.ownerFaction as PowerFactionId) : playerFaction;
+
   const offers: MissionOffer[] = shuffledDurations.map(({ durationMin }, slotIndex) => {
     const baseDurationSec = durationMin * 60;
     const actualDurationSec = computeActualDurationSec(baseDurationSec, mountMultiplierBp);
@@ -420,28 +545,28 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
 
     if (slotIndex === 0) {
       // 同阵营任务
-      const templates = FACTION_OWN_MISSION_TEMPLATES[playerFaction];
+      const templates = FACTION_OWN_MISSION_TEMPLATES[baseFaction];
       const tmpl = rng.pick(templates);
       title = tmpl.title;
       locationName = tmpl.locationName;
       powerContext = {
-        issuerFaction: playerFaction,
+        issuerFaction: baseFaction,
         targetFaction: tmpl.targetFaction,
         caseType: tmpl.caseType,
         // 同阵营任务牵连低，给目标阵营加 1-3 疑心
         suspicionDeltaPreview:
-          tmpl.targetFaction !== playerFaction
+          tmpl.targetFaction !== baseFaction
             ? { [tmpl.targetFaction]: 1 }
             : undefined,
       };
     } else if (slotIndex === 1) {
       // 皇权/中枢任务
-      const imperialTemplates = IMPERIAL_MISSION_TEMPLATES[playerFaction];
+      const imperialTemplates = IMPERIAL_MISSION_TEMPLATES[baseFaction];
       const tmpl = rng.pick(imperialTemplates);
       title = tmpl.title;
       locationName = tmpl.locationName;
       powerContext = {
-        issuerFaction: 'imperial',
+        issuerFaction: locationId ? baseFaction : 'imperial',
         targetFaction: tmpl.targetFaction,
         caseType: tmpl.caseType,
         // 皇权任务对目标阵营加 2-5 疑心
@@ -449,12 +574,12 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
       };
     } else {
       // 跨阵营任务
-      const crossTemplates = CROSS_FACTION_MISSION_TEMPLATES[playerFaction];
+      const crossTemplates = CROSS_FACTION_MISSION_TEMPLATES[baseFaction];
       const tmpl = rng.pick(crossTemplates);
       title = tmpl.title;
       locationName = tmpl.locationName;
       powerContext = {
-        issuerFaction: playerFaction,
+        issuerFaction: baseFaction,
         targetFaction: tmpl.targetFaction,
         caseType: tmpl.caseType,
         // 跨阵营任务牵连最明显：目标阵营 3-8 疑心
@@ -462,13 +587,35 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
       };
     }
 
+    if (locationId) {
+      const flavor = generateLocationBasedTitleAndDescription(locationId, powerContext.caseType, slotIndex, rng);
+      title = flavor.title;
+      locationName = loc.name;
+    }
+
+    let targetActor: MissionTargetActorPreview | undefined;
+    if (powerContext) {
+      const actionCtx: ActionContext = {
+        playerId,
+        now,
+        state,
+        dirty: false,
+        markDirty: () => {}
+      };
+      targetActor = selectMissionTargetActor(actionCtx, powerContext.targetFaction, state.player.level, powerContext.caseType);
+    }
+
+    const description = locationId
+      ? `${generateLocationBasedTitleAndDescription(locationId, powerContext!.caseType, slotIndex, rng).desc}（前往${loc.name}活动 ${durationMin} 分钟）`
+      : buildMissionDescription(title, locationName, durationMin);
+
     return {
       offerSetId,
       missionId,
       offerSeq: nextOfferSeq,
       slotIndex: slotIndex as 0 | 1 | 2,
       title,
-      description: buildMissionDescription(title, locationName, durationMin),
+      description,
       locationName,
       baseDurationSec,
       actualDurationSec,
@@ -477,6 +624,15 @@ export function generateMissionOffers(state: GameState, now: number): MissionOff
       enemyPreview: buildEnemyPreview(state.player.level, slotIndex, offerSetId),
       generatedAt: now,
       powerContext,
+      targetActor,
+      // 来源字段
+      sourceLocationId,
+      sourceLocationName,
+      sourcePositionId,
+      issuerActorId: resolvedIssuerActorId,
+      issuerDisplayName,
+      issuerTitle,
+      issuerFaction,
     };
   });
 
@@ -513,6 +669,15 @@ export function buildActiveMissionView(activeMission: ActiveMission | null, now:
     },
     mountSnapshot: activeMission.mountSnapshot,
     powerContext: activeMission.powerContext,
+    targetActor: activeMission.targetActor,
+    // 来源字段
+    sourceLocationId: activeMission.sourceLocationId,
+    sourceLocationName: activeMission.sourceLocationName,
+    sourcePositionId: activeMission.sourcePositionId,
+    issuerActorId: activeMission.issuerActorId,
+    issuerDisplayName: activeMission.issuerDisplayName,
+    issuerTitle: activeMission.issuerTitle,
+    issuerFaction: activeMission.issuerFaction,
   };
 }
 
@@ -559,11 +724,19 @@ function buildTavernResponse(action: string, state: GameState, now: number): Act
 
 export function getTavernInfo(
   ctx: ActionContext,
-  _payload: Record<string, unknown>,
+  payload: Record<string, unknown>,
 ): ActionSuccessResponse<TavernInfoData> {
-  if (getTavernStatus(ctx.state, ctx.now) === 'IDLE' && ctx.state.tavern.missionOffers.length === 0) {
-    generateMissionOffers(ctx.state, ctx.now);
-    ctx.markDirty();
+  const locationId = payload.locationId !== undefined ? String(payload.locationId) : undefined;
+  const servicePositionId = payload.servicePositionId !== undefined ? String(payload.servicePositionId) : undefined;
+  const issuerActorId = payload.issuerActorId !== undefined ? String(payload.issuerActorId) : undefined;
+
+  if (getTavernStatus(ctx.state, ctx.now) === 'IDLE') {
+    const needsRegen = ctx.state.tavern.missionOffers.length === 0 ||
+                      ctx.state.tavern.missionOffers[0]?.sourceLocationId !== locationId;
+    if (needsRegen) {
+      generateMissionOffers(ctx.state, ctx.now, locationId, servicePositionId, issuerActorId);
+      ctx.markDirty();
+    }
   }
 
   return buildTavernResponse('TAVERN_GET_INFO', ctx.state, ctx.now);
@@ -571,14 +744,21 @@ export function getTavernInfo(
 
 export function generateMissions(
   ctx: ActionContext,
-  _payload: Record<string, unknown>,
+  payload: Record<string, unknown>,
 ): ActionSuccessResponse<TavernInfoData> {
   if (ctx.state.tavern.activeMission !== null) {
     throw new GameError('INVALID_TAVERN_STATE', 'Cannot generate missions while a mission is active.');
   }
 
-  if (ctx.state.tavern.missionOffers.length === 0) {
-    generateMissionOffers(ctx.state, ctx.now);
+  const locationId = payload.locationId !== undefined ? String(payload.locationId) : undefined;
+  const servicePositionId = payload.servicePositionId !== undefined ? String(payload.servicePositionId) : undefined;
+  const issuerActorId = payload.issuerActorId !== undefined ? String(payload.issuerActorId) : undefined;
+
+  const needsRegen = ctx.state.tavern.missionOffers.length === 0 ||
+                    ctx.state.tavern.missionOffers[0]?.sourceLocationId !== locationId;
+
+  if (needsRegen) {
+    generateMissionOffers(ctx.state, ctx.now, locationId, servicePositionId, issuerActorId);
     ctx.markDirty();
   }
 

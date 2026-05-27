@@ -105,5 +105,7 @@
 | :--- | :--- | :--- |
 | `WORLD_PLAYER_ACTOR_NOT_FOUND` | 世界角色池中未找到与玩家关联的 Actor 节点 | 前端提示“世界地图连接异常，请重试” |
 | `WORLD_ACTOR_NOT_FOUND` | 指定 actorId 不存在于世界角色池中，或 actorId 参数为空 | 前端提示"角色不存在或已离开世界地图" |
+| `LOCATION_NOT_FOUND` | 指定的地点不存在 | 前端提示“该地点无法找到” |
+| `LOCATION_MISSIONS_NOT_AVAILABLE` | 指定的地点不提供 missions 差事服务 | 禁用该地点的接取差事功能并 Toast 提示“该职位当前不发布差事” |
 
-*Last Updated: 2026-05-27*
+*Last Updated: 2026-05-28*

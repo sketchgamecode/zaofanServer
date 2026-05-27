@@ -424,6 +424,23 @@ export type MissionPowerContext = {
   suspicionDeltaPreview?: Partial<Record<PowerFactionId, number>>;
 };
 
+export type MissionTargetActorPreview = {
+  actorId: string;
+  kind: 'bot' | 'player';
+  displayName: string;
+  avatarId: string;
+  level: number;
+  classId: PlayerClassId;
+  raceId?: RaceId;
+  faction: PowerFactionId;
+  locationId: string;
+  locationName?: string;
+  powerShare: number;
+  title?: string;
+  positionId?: string;
+  reason: string;
+};
+
 export type MissionOffer = {
   offerSetId: string;
   missionId: string;
@@ -440,6 +457,22 @@ export type MissionOffer = {
   generatedAt: number;
   /** 权力集团差事上下文（阶段1新增） */
   powerContext?: MissionPowerContext;
+  /** 任务目标世界角色预览（阶段6新增） */
+  targetActor?: MissionTargetActorPreview;
+  /** 任务发布来源地点ID（阶段7新增） */
+  sourceLocationId?: string;
+  /** 任务发布来源地点名称（阶段7新增） */
+  sourceLocationName?: string;
+  /** 任务发布来源职务职位ID（阶段7新增） */
+  sourcePositionId?: string;
+  /** 任务发布人角色ID（阶段7新增） */
+  issuerActorId?: string;
+  /** 任务发布人姓名（阶段7新增） */
+  issuerDisplayName?: string;
+  /** 任务发布人职务头衔（阶段7新增） */
+  issuerTitle?: string;
+  /** 任务发布人势力派系ID（阶段7新增） */
+  issuerFaction?: PowerFactionId;
 };
 
 export type ActiveMission = {
@@ -465,6 +498,22 @@ export type ActiveMission = {
   rewardGranted: boolean;
   /** 权力集团差事上下文（从 MissionOffer 携带过来，确保结算时不丢失） */
   powerContext?: MissionPowerContext;
+  /** 任务目标世界角色预览（阶段6新增） */
+  targetActor?: MissionTargetActorPreview;
+  /** 任务发布来源地点ID（阶段7新增） */
+  sourceLocationId?: string;
+  /** 任务发布来源地点名称（阶段7新增） */
+  sourceLocationName?: string;
+  /** 任务发布来源职务职位ID（阶段7新增） */
+  sourcePositionId?: string;
+  /** 任务发布人角色ID（阶段7新增） */
+  issuerActorId?: string;
+  /** 任务发布人姓名（阶段7新增） */
+  issuerDisplayName?: string;
+  /** 任务发布人职务头衔（阶段7新增） */
+  issuerTitle?: string;
+  /** 任务发布人势力派系ID（阶段7新增） */
+  issuerFaction?: PowerFactionId;
 };
 
 export type PowerTransferResult = {
@@ -500,6 +549,22 @@ export type MissionSettlement = {
     suspicionAfter?: Partial<Record<PowerFactionId, number>>;
     powerTransfer?: PowerTransferResult;
   };
+  /** 任务目标世界角色预览（阶段6新增） */
+  targetActor?: MissionTargetActorPreview;
+  /** 任务发布来源地点ID（阶段7新增） */
+  sourceLocationId?: string;
+  /** 任务发布来源地点名称（阶段7新增） */
+  sourceLocationName?: string;
+  /** 任务发布来源职务职位ID（阶段7新增） */
+  sourcePositionId?: string;
+  /** 任务发布人角色ID（阶段7新增） */
+  issuerActorId?: string;
+  /** 任务发布人姓名（阶段7新增） */
+  issuerDisplayName?: string;
+  /** 任务发布人职务头衔（阶段7新增） */
+  issuerTitle?: string;
+  /** 任务发布人势力派系ID（阶段7新增） */
+  issuerFaction?: PowerFactionId;
 };
 
 export type TavernState = {

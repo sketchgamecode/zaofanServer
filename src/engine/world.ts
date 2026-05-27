@@ -1,6 +1,6 @@
 import type { ActionSuccessResponse } from '../types/action.js';
 import type { ActionContext } from './actionContext.js';
-import type { CharacterInfoView, PlayerClassId, PowerFactionId, RaceId, WorldActor, PowerLocation, PowerLocationView, PowerLocationService, PowerLocationStatus, ServicePositionView, ServicePositionStatus, PowerTransferResult, WorldActorDetailView, ActorPositionSummary, WorldServicePositionListItem } from '../types/gameState.js';
+import type { CharacterInfoView, PlayerClassId, PowerFactionId, RaceId, WorldActor, PowerLocation, PowerLocationView, PowerLocationService, PowerLocationStatus, ServicePositionView, ServicePositionStatus, PowerTransferResult, WorldActorDetailView, ActorPositionSummary, WorldServicePositionListItem, MissionTargetActorPreview, MissionCaseType } from '../types/gameState.js';
 import { RACE_CONFIGS } from '../config/raceConfig.js';
 import { GameError } from './errors.js';
 import { buildCharacterInfoView } from './character.js';
@@ -430,7 +430,7 @@ const INCOME_HINT_BY_SERVICE: Record<PowerLocationService, string> = {
 
 const REPLACE_HINT = '达到等级、派系关系和地点贡献要求后，后续可争夺此职。';
 
-function buildServicePositions(
+export function buildServicePositions(
   loc: PowerLocation,
   actors: WorldActor[],
   ctx: ActionContext,
@@ -670,6 +670,7 @@ export function applyWorldPowerTransfer(
     targetFactionId?: PowerFactionId;
     targetFactionIds?: PowerFactionId[];
     issuerFactionId: PowerFactionId;
+    targetActorId?: string;
   }
 ): PowerTransferResult {
   ensureWorldInitialized(ctx);
@@ -730,8 +731,14 @@ export function applyWorldPowerTransfer(
     a => targetFactions.has(a.faction) && a.actorId !== playerActorId && a.powerShare > 0
   );
 
-  // Sort by powerShare descending
-  targetActors.sort((a, b) => b.powerShare - a.powerShare);
+  // Sort: if targetActorId matches options.targetActorId, it goes first. Otherwise sort by powerShare descending
+  targetActors.sort((a, b) => {
+    if (options.targetActorId) {
+      if (a.actorId === options.targetActorId) return -1;
+      if (b.actorId === options.targetActorId) return 1;
+    }
+    return b.powerShare - a.powerShare;
+  });
 
   let remainingDeduct = amount;
   const targetActorIds: string[] = [];
@@ -1062,5 +1069,191 @@ export async function worldServicePositionsGetList(
     data: {
       positions: allPositions,
     },
+  };
+}
+
+export function selectMissionTargetActor(
+  ctx: ActionContext,
+  targetFaction: PowerFactionId,
+  playerLevel: number,
+  caseType: MissionCaseType,
+): MissionTargetActorPreview {
+  ensureWorldInitialized(ctx);
+  const actors = ctx.state.world.actors;
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+
+  // 1. Precompute service positions to check if actor occupies one and what title they have
+  const occupiedActorMap = new Map<string, { positionId: string; title: string; locationId: string }>();
+  for (const loc of POWER_LOCATIONS) {
+    const positions = buildServicePositions(loc, actors, ctx, playerActorId);
+    for (const pos of positions) {
+      occupiedActorMap.set(pos.occupant.actorId, {
+        positionId: pos.positionId,
+        title: pos.title,
+        locationId: pos.locationId,
+      });
+    }
+  }
+
+  // Helper to check target faction locations
+  const targetFactionLocations = new Set(
+    POWER_LOCATIONS.filter(loc => loc.ownerFaction === targetFaction).map(loc => loc.locationId)
+  );
+
+  // Sorting/comparator function
+  const compareActors = (a: WorldActor, b: WorldActor): number => {
+    // 2. level proximity
+    const diffA = Math.abs(a.level - playerLevel);
+    const diffB = Math.abs(b.level - playerLevel);
+    if (diffA !== diffB) {
+      return diffA - diffB;
+    }
+
+    // 3. location in targetFaction locations
+    const locA = targetFactionLocations.has(a.locationId);
+    const locB = targetFactionLocations.has(b.locationId);
+    if (locA !== locB) {
+      return (locB ? 1 : 0) - (locA ? 1 : 0);
+    }
+
+    // 4. powerShare > 0
+    const pA = a.powerShare > 0;
+    const pB = b.powerShare > 0;
+    if (pA !== pB) {
+      return (pB ? 1 : 0) - (pA ? 1 : 0);
+    }
+
+    // 5. servicePosition
+    const spA = occupiedActorMap.has(a.actorId);
+    const spB = occupiedActorMap.has(b.actorId);
+    if (spA !== spB) {
+      return (spB ? 1 : 0) - (spA ? 1 : 0);
+    }
+
+    return a.actorId.localeCompare(b.actorId);
+  };
+
+  // Filter strict pool
+  let pool = actors.filter(a => {
+    if (a.actorId === playerActorId) return false;
+    if (a.faction !== targetFaction) return false;
+    if (Math.abs(a.level - playerLevel) > 15) return false;
+    return true;
+  });
+
+  let fallbackType: 'none' | 'faction' | 'world' = 'none';
+
+  if (pool.length === 0) {
+    // Fallback to same faction
+    pool = actors.filter(a => a.actorId !== playerActorId && a.faction === targetFaction);
+    fallbackType = 'faction';
+  }
+
+  if (pool.length === 0) {
+    // Fallback to any world actor
+    pool = actors.filter(a => a.actorId !== playerActorId);
+    fallbackType = 'world';
+  }
+
+  if (pool.length === 0) {
+    throw new GameError('INVALID_GAME_STATE', 'No world actors available.');
+  }
+
+  pool.sort(compareActors);
+  const chosen = pool[0]!;
+
+  // Generate reason
+  let reason = '';
+  if (fallbackType === 'world') {
+    // Generic reason
+    const genericReasons: Record<MissionCaseType, string> = {
+      raid: '行踪可疑的搜查对象',
+      audit: '形迹可疑的账簿持有者',
+      escort: '路途中意图不轨的窥伺者',
+      arrest: '涉嫌作乱的捉拿对象',
+      purge: '牵连行迹诡秘的涉案人员',
+      smuggle: '暗中潜行的走私嫌疑人',
+      petition: '阻碍官私信件的拦路人',
+    };
+    reason = genericReasons[caseType] ?? '涉案关联人员';
+  } else {
+    // Faction-specific reason
+    const factionReasons: Record<PowerFactionId, Record<MissionCaseType, string>> = {
+      imperial: {
+        raid: '内廷私库案查抄关联人',
+        audit: '户部库银亏空账册经手人',
+        escort: '密诏押运暗中窥伺者',
+        arrest: '东厂通缉钦犯',
+        purge: '禁中谋逆案株连要犯',
+        smuggle: '内官监出京私贩经办人',
+        petition: '阻拦密折呈送的内侍心腹',
+      },
+      noble: {
+        raid: '勋贵别业私藏兵甲牵连人',
+        audit: '侵占军田账册管事',
+        escort: '拦截国公府密信之人',
+        arrest: '包庇京畿恶霸的国公府家奴',
+        purge: '蓝党旧部余孽门丁',
+        smuggle: '勋贵私运违禁铁器庄头',
+        petition: '勋贵联名抗疏执笔人',
+      },
+      censorate: {
+        raid: '弹劾折草稿抄引人',
+        audit: '御史台稽查账册经手人',
+        escort: '清流搜集罪证押送护卫',
+        arrest: '妄议朝政御史台吏员',
+        purge: '清流结党案门生',
+        smuggle: '暗通京外书院的清流密使',
+        petition: '都察院御史弹章经手人',
+      },
+      border: {
+        raid: '克扣军饷倒卖物资牵连人',
+        audit: '边镇粮道运饷账册心腹',
+        escort: '私运塞外军资劫道者',
+        arrest: '私通外敌的边将亲兵',
+        purge: '割裂防线通敌案内奸',
+        smuggle: '边镇粮道违禁走私头目',
+        petition: '阻截边关急递的悍卒',
+      },
+      silver: {
+        raid: '私铸劣钱工坊牵连人',
+        audit: '盐引私盐账册管账人',
+        escort: '商会私吞镖银劫掠人',
+        arrest: '行贿朝廷官员的商会买办',
+        purge: '商会偷税漏税连带掌柜',
+        smuggle: '违禁私运私盐盐引贩子',
+        petition: '勾结官员阻挠开市的商会心腹',
+      },
+      underworld: {
+        raid: '香会私设官堂据点打手',
+        audit: '香会堂口地下钱庄管事',
+        escort: '黑市赃物押送拦截者',
+        arrest: '香会暗线通缉头目',
+        purge: '香会暗线分舵舵主',
+        smuggle: '香会违禁走私暗线头目',
+        petition: '劫夺官府告密信的刺客',
+      },
+    };
+    reason = factionReasons[chosen.faction]?.[caseType] ?? '涉案关联人员';
+  }
+
+  const avatarId = getActorAvatarId(chosen, ctx);
+  const posInfo = occupiedActorMap.get(chosen.actorId);
+
+  return {
+    actorId: chosen.actorId,
+    kind: chosen.kind,
+    displayName: chosen.displayName,
+    avatarId,
+    level: chosen.level,
+    classId: chosen.classId,
+    raceId: chosen.raceId,
+    faction: chosen.faction,
+    locationId: chosen.locationId,
+    locationName: LOCATION_NAMES[chosen.locationId],
+    powerShare: chosen.powerShare,
+    title: posInfo?.title,
+    positionId: posInfo?.positionId,
+    reason,
   };
 }

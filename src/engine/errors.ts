@@ -40,7 +40,9 @@ export type GameErrorCode =
   | 'INVALID_NICKNAME'
   | 'INVALID_AVATAR'
   | 'WORLD_PLAYER_ACTOR_NOT_FOUND'
-  | 'WORLD_ACTOR_NOT_FOUND';
+  | 'WORLD_ACTOR_NOT_FOUND'
+  | 'LOCATION_NOT_FOUND'
+  | 'LOCATION_MISSIONS_NOT_AVAILABLE';
 
 export class GameError extends Error {
   public readonly code: GameErrorCode;

@@ -16,10 +16,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { generateMissionOffers, buildActiveMissionView } from './tavern.js';
+import { generateMissionOffers, buildActiveMissionView, getTavernInfo } from './tavern.js';
 import { startMission, completeMission, skipMission } from './missions.js';
 import { createInitialGameState } from './gameStateFactory.js';
 import type { GameState, PowerFactionId, MissionOffer, ActiveMission } from '../types/gameState.js';
+import { ensureWorldInitialized } from './world.js';
 
 // ---------------------------------------------------------------------------
 // 测试工具
@@ -53,6 +54,10 @@ function makeActiveState(overrides?: Partial<GameState['player']>): GameState {
   state.resources.copper = 99999;
   state.resources.tokens = 100;
   state.resources.hourglasses = 100;
+
+  // Initialize world actors so location/servicePosition lookup doesn't crash on empty array
+  ensureWorldInitialized(makeCtx(state));
+
   if (overrides) {
     Object.assign(state.player, overrides);
   }
@@ -471,5 +476,225 @@ describe('现有任务逻辑不回归', () => {
     expect(res2.data.powerResult).toBeDefined();
     expect(res2.data.powerResult!.powerTransfer).toBeDefined();
     expect(res2.data.powerResult!.powerTransfer!.actorPowerDelta).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. 任务目标世界角色化 V1 测试
+// ---------------------------------------------------------------------------
+describe('任务目标世界角色化 V1', () => {
+  it('GENERATE_MISSIONS 返回的每个 mission offer 都有 targetActor 且 faction 匹配', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000);
+    expect(offers).toHaveLength(3);
+    for (const offer of offers) {
+      expect(offer.targetActor).toBeDefined();
+      expect(offer.targetActor!.actorId).toBeDefined();
+      expect(offer.targetActor!.displayName).toBeDefined();
+      expect(offer.targetActor!.avatarId).toBeDefined();
+      expect(offer.targetActor!.faction).toBe(offer.powerContext!.targetFaction);
+      expect(offer.targetActor!.reason).toBeDefined();
+      expect(offer.targetActor!.reason.length).toBeGreaterThan(0);
+      expect(offer.targetActor!.level).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('START_MISSION 后 activeMission 保留同一个 targetActor 且敌方 snapshot 来自 targetActor', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    generateMissionOffers(state, 1_000_000);
+    const offer = state.tavern.missionOffers[0]!;
+    const expectedTarget = offer.targetActor!;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+
+    const active = state.tavern.activeMission!;
+    expect(active.targetActor).toBeDefined();
+    expect(active.targetActor!.actorId).toBe(expectedTarget.actorId);
+
+    // 敌方 snapshot 应该反映 targetActor
+    expect(active.enemySnapshot.enemyId).toBe(expectedTarget.actorId);
+    expect(active.enemySnapshot.name).toBe(expectedTarget.displayName);
+    expect(active.enemySnapshot.level).toBe(expectedTarget.level);
+    expect(active.enemySnapshot.classId).toBe(expectedTarget.classId);
+    expect(active.enemySnapshot.avatarId).toBe(expectedTarget.avatarId);
+  });
+
+  it('COMPLETE_MISSION 成功返回同一个 targetActor，并正常写入 suspicion / powerResult，且优先扣除 targetActor 权柄', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    generateMissionOffers(state, 1_000_000);
+    const offer = state.tavern.missionOffers[0]!;
+    const targetActorId = offer.targetActor!.actorId;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+    const active = state.tavern.activeMission!;
+    active.endTime = ctx.now - 1;
+
+    // 强制赢
+    active.playerCombatSnapshot.combatStats.hp = 99999;
+    active.enemySnapshot.combatStats.hp = 1;
+    active.enemySnapshot.combatStats.damageMin = 0;
+    active.enemySnapshot.combatStats.damageMax = 0;
+
+    // 记录 target actor 的 powerShare 之前
+    const actorInWorld = state.world.actors.find(a => a.actorId === targetActorId)!;
+    const powerBefore = actorInWorld.powerShare;
+
+    const res = completeMission(ctx, {});
+    expect(res.data.result).toBe('SUCCESS');
+    expect(res.data.targetActor).toBeDefined();
+    expect(res.data.targetActor!.actorId).toBe(targetActorId);
+
+    // 检查优先扣除了 targetActor 的权柄
+    const powerAfter = actorInWorld.powerShare;
+    expect(powerAfter).toBeLessThan(powerBefore);
+    expect(res.data.powerResult!.powerTransfer!.targetActorIds).toContain(targetActorId);
+  });
+
+  it('COMPLETE_MISSION 失败返回同一个 targetActor，但不转移权柄，且目标不因胜负被删除或夺职', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    generateMissionOffers(state, 1_000_000);
+    const offer = state.tavern.missionOffers[0]!;
+    const targetActorId = offer.targetActor!.actorId;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+    const active = state.tavern.activeMission!;
+    active.endTime = ctx.now - 1;
+
+    // 强制输
+    active.playerCombatSnapshot.combatStats.hp = 1;
+    active.playerCombatSnapshot.combatStats.damageMin = 0;
+    active.playerCombatSnapshot.combatStats.damageMax = 0;
+    active.enemySnapshot.combatStats.hp = 99999;
+    active.enemySnapshot.combatStats.damageMin = 999;
+    active.enemySnapshot.combatStats.damageMax = 999;
+
+    // 记录 target actor 的 powerShare
+    const actorInWorld = state.world.actors.find(a => a.actorId === targetActorId)!;
+    const powerBefore = actorInWorld.powerShare;
+
+    const res = completeMission(ctx, {});
+    expect(res.data.result).toBe('FAILED');
+    expect(res.data.targetActor).toBeDefined();
+    expect(res.data.targetActor!.actorId).toBe(targetActorId);
+
+    // 失败时不触发权柄转移
+    const powerAfter = actorInWorld.powerShare;
+    expect(powerAfter).toBe(powerBefore);
+    expect(res.data.powerResult).toBeUndefined();
+
+    // 目标不应被删除
+    expect(state.world.actors.find(a => a.actorId === targetActorId)).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. 任务发布场所统一化 V1 测试
+// ---------------------------------------------------------------------------
+describe('任务发布场所统一化 V1', () => {
+  it('向带有 missions 服务的地点（如 northern_bureau）生成任务成功，且携带 7 个来源字段及北镇抚司风味标题', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    expect(offers).toHaveLength(3);
+    for (const offer of offers) {
+      expect(offer.sourceLocationId).toBe('northern_bureau');
+      expect(offer.sourceLocationName).toBe('北镇抚司');
+      expect(offer.sourcePositionId).toBe('northern_bureau:missions');
+      expect(offer.issuerActorId).toBeDefined();
+      expect(offer.issuerDisplayName).toBeDefined();
+      expect(offer.issuerTitle).toBe('北镇经历司吏');
+      expect(offer.issuerFaction).toBe('imperial');
+      expect(offer.powerContext!.issuerFaction).toBe('imperial');
+      
+      expect(offer.title).toMatch(/^(诏狱严审重犯|密查百官行迹|缉拿潜逃钦犯|抄没违禁私财)$/);
+      expect(offer.description).toContain('（前往北镇抚司活动');
+    }
+  });
+
+  it('向不带有 missions 服务的地点（如 imperial_palace）生成任务应抛出 LOCATION_MISSIONS_NOT_AVAILABLE 错误', () => {
+    const state = makeActiveState();
+    expect(() => {
+      generateMissionOffers(state, 1_000_000, 'imperial_palace');
+    }).toThrowError('Missions are not available at 皇宫.');
+  });
+
+  it('START_MISSION 启动场所任务后，activeMission 能够完备保留来源字段', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    const offer = offers[0]!;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+
+    const active = state.tavern.activeMission!;
+    expect(active.sourceLocationId).toBe('northern_bureau');
+    expect(active.sourceLocationName).toBe('北镇抚司');
+    expect(active.sourcePositionId).toBe('northern_bureau:missions');
+    expect(active.issuerActorId).toBe(offer.issuerActorId);
+    expect(active.issuerDisplayName).toBe(offer.issuerDisplayName);
+    expect(active.issuerTitle).toBe(offer.issuerTitle);
+    expect(active.issuerFaction).toBe('imperial');
+
+    const view = buildActiveMissionView(active, ctx.now)!;
+    expect(view.sourceLocationId).toBe('northern_bureau');
+    expect(view.sourceLocationName).toBe('北镇抚司');
+    expect(view.sourcePositionId).toBe('northern_bureau:missions');
+    expect(view.issuerActorId).toBe(offer.issuerActorId);
+    expect(view.issuerDisplayName).toBe(offer.issuerDisplayName);
+    expect(view.issuerTitle).toBe(offer.issuerTitle);
+    expect(view.issuerFaction).toBe('imperial');
+  });
+
+  it('COMPLETE_MISSION 完成结算后，CompleteMissionData 依旧成功携带来源字段，且权柄转移按场所势力参与结算', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    const offer = offers[0]!;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+    const active = state.tavern.activeMission!;
+    active.endTime = ctx.now - 1;
+
+    active.playerCombatSnapshot.combatStats.hp = 99999;
+    active.enemySnapshot.combatStats.hp = 1;
+    active.enemySnapshot.combatStats.damageMin = 0;
+    active.enemySnapshot.combatStats.damageMax = 0;
+
+    const res = completeMission(ctx, {});
+    expect(res.data.result).toBe('SUCCESS');
+    expect(res.data.sourceLocationId).toBe('northern_bureau');
+    expect(res.data.sourceLocationName).toBe('北镇抚司');
+    expect(res.data.sourcePositionId).toBe('northern_bureau:missions');
+    expect(res.data.issuerActorId).toBe(offer.issuerActorId);
+    expect(res.data.issuerDisplayName).toBe(offer.issuerDisplayName);
+    expect(res.data.issuerTitle).toBe(offer.issuerTitle);
+    expect(res.data.issuerFaction).toBe('imperial');
+
+    expect(res.data.powerResult).toBeDefined();
+    expect(res.data.powerResult!.powerTransfer).toBeDefined();
+    expect(res.data.powerResult!.powerTransfer!.targetFactionPowerDelta?.['imperial']).toBe(-1);
+  });
+
+  it('getTavernInfo 和 generateMissions 应该在 locationId 变化时重新生成任务', () => {
+    const state = makeActiveState();
+    const ctx = makeCtx(state);
+    
+    // First query with default (no location)
+    const res1 = getTavernInfo(ctx, {});
+    expect(res1.data.tavern.missionOffers[0]!.sourceLocationId).toBeUndefined();
+
+    // Query for northern_bureau
+    const res2 = getTavernInfo(ctx, { locationId: 'northern_bureau' });
+    expect(res2.data.tavern.missionOffers[0]!.sourceLocationId).toBe('northern_bureau');
+
+    // Query for censorate
+    const res3 = getTavernInfo(ctx, { locationId: 'censorate' });
+    expect(res3.data.tavern.missionOffers[0]!.sourceLocationId).toBe('censorate');
+
+    // Query back to no location
+    const res4 = getTavernInfo(ctx, {});
+    expect(res4.data.tavern.missionOffers[0]!.sourceLocationId).toBeUndefined();
   });
 });
