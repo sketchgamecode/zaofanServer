@@ -698,3 +698,92 @@ describe('任务发布场所统一化 V1', () => {
     expect(res4.data.tavern.missionOffers[0]!.sourceLocationId).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 10. 任务发布人角色化 V1 测试
+// ---------------------------------------------------------------------------
+describe('任务发布人角色化 V1', () => {
+  it('TAVERN_GET_INFO 带 locationId 时，MissionOffer 包含 issuerActor 且与零散字段一致', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    expect(offers).toHaveLength(3);
+    for (const offer of offers) {
+      expect(offer.issuerActor).toBeDefined();
+      expect(offer.issuerActor!.actorId).toBe(offer.issuerActorId);
+      expect(offer.issuerActor!.displayName).toBe(offer.issuerDisplayName);
+      const actualActor = state.world.actors.find(a => a.actorId === offer.issuerActor!.actorId)!;
+      expect(offer.issuerActor!.faction).toBe(actualActor.faction);
+      expect(offer.issuerActor!.title).toBe(offer.issuerTitle);
+      expect(offer.issuerActor!.locationId).toBe(offer.sourceLocationId);
+      expect(offer.issuerActor!.locationName).toBe(offer.sourceLocationName);
+      expect(offer.issuerActor!.positionId).toBe(offer.sourcePositionId);
+      expect(offer.issuerActor!.avatarId).toBeDefined();
+      expect(offer.issuerActor!.level).toBeGreaterThanOrEqual(1);
+      expect(offer.issuerActor!.powerShare).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('START_MISSION 启动场所任务后，ActiveMissionView 保留并透传 issuerActor', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    const offer = offers[0]!;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+
+    const active = state.tavern.activeMission!;
+    expect(active.issuerActor).toBeDefined();
+    expect(active.issuerActor!.actorId).toBe(offer.issuerActor!.actorId);
+
+    const view = buildActiveMissionView(active, ctx.now, state)!;
+    expect(view.issuerActor).toBeDefined();
+    expect(view.issuerActor!.actorId).toBe(offer.issuerActor!.actorId);
+  });
+
+  it('COMPLETE_MISSION 结算后，CompleteMissionData 依旧携带 issuerActor', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    const offer = offers[0]!;
+
+    const ctx = makeCtx(state);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+    const active = state.tavern.activeMission!;
+    active.endTime = ctx.now - 1;
+
+    active.playerCombatSnapshot.combatStats.hp = 99999;
+    active.enemySnapshot.combatStats.hp = 1;
+    active.enemySnapshot.combatStats.damageMin = 0;
+    active.enemySnapshot.combatStats.damageMax = 0;
+
+    const res = completeMission(ctx, {});
+    expect(res.data.result).toBe('SUCCESS');
+    expect(res.data.issuerActor).toBeDefined();
+    expect(res.data.issuerActor!.actorId).toBe(offer.issuerActor!.actorId);
+  });
+
+  it('如果传了指定的 issuerActorId，且属于 world.actors，应优先使用该 actor', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    
+    // 从 world.actors 找一个同 faction 的 bot 成员
+    const testActor = state.world.actors.find(a => a.faction === 'imperial' && a.kind === 'bot')!;
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau', undefined, testActor.actorId);
+    
+    expect(offers[0]!.issuerActor).toBeDefined();
+    expect(offers[0]!.issuerActor!.actorId).toBe(testActor.actorId);
+    expect(offers[0]!.issuerActor!.displayName).toBe(testActor.displayName);
+    expect(offers[0]!.issuerActorId).toBe(testActor.actorId);
+  });
+
+  it('如果传了不存在的 issuerActorId，应回退到该地点 missions 职务 occupant 并不影响任务生成', () => {
+    const state = makeActiveState({ powerFaction: 'border' });
+    
+    // 传一个不存在的 ID
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau', undefined, 'non-existent-actor-id');
+    
+    // 应正常生成且 issuerActor 自动回退到 occupant
+    expect(offers).toHaveLength(3);
+    expect(offers[0]!.issuerActor).toBeDefined();
+    expect(offers[0]!.issuerActorId).toBeDefined();
+    expect(offers[0]!.issuerActorId).not.toBe('non-existent-actor-id');
+  });
+});

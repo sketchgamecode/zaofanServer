@@ -215,14 +215,9 @@ type MissionPowerContext = {
 ```
 
 说明：
-- `MissionOffer`、`ActiveMissionView` 与 `CompleteMissionData`（结算）均扩展了 7 个可选的来源字段，用以支持场所发差事（任务发布场所统一化 V1）：
-  - `sourceLocationId?: string;`
-  - `sourceLocationName?: string;`
-  - `sourcePositionId?: string;`
-  - `issuerActorId?: string;`
-  - `issuerDisplayName?: string;`
-  - `issuerTitle?: string;`
-  - `issuerFaction?: PowerFactionId;`
+- `MissionOffer`、`ActiveMissionView` 与 `CompleteMissionData`（结算）均已扩展 `issuerActor` 属性，用以支持任务发布人角色化 V1：
+  - `issuerActor?: MissionIssuerActorPreview;`（内含 `actorId`, `kind`, `displayName`, `avatarId`, `level`, `faction`, `powerShare`, `title?`, `positionId?`, `locationId?`, `locationName?`，且个人属性部分与 `world.actors` 保持实时强一致）。
+  - 保留原有 7 个零散字段作为兼容字段（`sourceLocationId`, `sourceLocationName`, `sourcePositionId`, `issuerActorId`, `issuerDisplayName`, `issuerTitle`, `issuerFaction`）。
 - `MissionOffer.powerContext?` 在任务列表中携带此字段。
 - `MissionOffer.targetActor?` 在任务列表中携带目标角色预览。
 - `ActiveMissionView.powerContext?` 在任务进行中也返回此字段。

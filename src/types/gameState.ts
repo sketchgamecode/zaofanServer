@@ -441,6 +441,20 @@ export type MissionTargetActorPreview = {
   reason: string;
 };
 
+export type MissionIssuerActorPreview = {
+  actorId: string;
+  kind: 'bot' | 'player';
+  displayName: string;
+  avatarId: string;
+  level: number;
+  faction: PowerFactionId;
+  powerShare: number;
+  title?: string;
+  positionId?: string;
+  locationId?: string;
+  locationName?: string;
+};
+
 export type MissionOffer = {
   offerSetId: string;
   missionId: string;
@@ -473,6 +487,8 @@ export type MissionOffer = {
   issuerTitle?: string;
   /** 任务发布人势力派系ID（阶段7新增） */
   issuerFaction?: PowerFactionId;
+  /** 任务发布人世界角色预览（任务发布人角色化 V1 新增） */
+  issuerActor?: MissionIssuerActorPreview;
 };
 
 export type ActiveMission = {
@@ -514,6 +530,8 @@ export type ActiveMission = {
   issuerTitle?: string;
   /** 任务发布人势力派系ID（阶段7新增） */
   issuerFaction?: PowerFactionId;
+  /** 任务发布人世界角色预览（任务发布人角色化 V1 新增） */
+  issuerActor?: MissionIssuerActorPreview;
 };
 
 export type PowerTransferResult = {
@@ -565,6 +583,8 @@ export type MissionSettlement = {
   issuerTitle?: string;
   /** 任务发布人势力派系ID（阶段7新增） */
   issuerFaction?: PowerFactionId;
+  /** 任务发布人世界角色预览（任务发布人角色化 V1 新增） */
+  issuerActor?: MissionIssuerActorPreview;
 };
 
 export type TavernState = {

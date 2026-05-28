@@ -11,6 +11,8 @@ import type {
   PowerFactionId,
   RaceId,
   VisibleReward,
+  MissionIssuerActorPreview,
+  WorldActor,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { selectMissionTargetActor, POWER_LOCATIONS, buildServicePositions } from './world.js';
@@ -56,6 +58,8 @@ export type ActiveMissionView = {
   issuerDisplayName?: string;
   issuerTitle?: string;
   issuerFaction?: PowerFactionId;
+  // 任务发布人世界角色预览（任务发布人角色化 V1 新增）
+  issuerActor?: MissionIssuerActorPreview;
 };
 
 export type TavernInfoData = {
@@ -452,6 +456,38 @@ function generateLocationBasedTitleAndDescription(
   return list[slotIndex % list.length];
 }
 
+function getActorAvatarId(actor: WorldActor, state: GameState): string {
+  if (actor.kind === 'player' && state.player.avatarId) {
+    return state.player.avatarId;
+  }
+  let hash = 0;
+  const key = actor.actorId + actor.displayName;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash << 5) - hash + key.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % 64;
+  return `avatar_placeholder_${String(index).padStart(3, '0')}`;
+}
+
+function refreshIssuerActor(
+  issuerActor: MissionIssuerActorPreview | undefined,
+  state: GameState,
+): MissionIssuerActorPreview | undefined {
+  if (!issuerActor) return undefined;
+  const current = state.world?.actors?.find(a => a.actorId === issuerActor.actorId);
+  if (!current) return issuerActor;
+
+  return {
+    ...issuerActor,
+    displayName: current.displayName,
+    avatarId: getActorAvatarId(current, state),
+    level: current.level,
+    faction: current.faction,
+    powerShare: current.powerShare,
+  };
+}
+
 export function generateMissionOffers(
   state: GameState,
   now: number,
@@ -497,14 +533,27 @@ export function generateMissionOffers(
   let issuerDisplayName: string | undefined = undefined;
   let issuerTitle: string | undefined = undefined;
   let issuerFaction: PowerFactionId | undefined = undefined;
+  let issuerActor: MissionIssuerActorPreview | undefined = undefined;
 
-  if (locationId) {
-    loc = POWER_LOCATIONS.find(l => l.locationId === locationId);
-    if (!loc) {
-      throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  let resolvedLocId = locationId;
+  if (!resolvedLocId && issuerActorId) {
+    const act = state.world?.actors?.find(a => a.actorId === issuerActorId);
+    if (act) {
+      resolvedLocId = act.locationId;
     }
-    if (!loc.services.includes('missions')) {
-      throw new GameError('LOCATION_MISSIONS_NOT_AVAILABLE', `Missions are not available at ${loc.name}.`);
+  }
+
+  if (resolvedLocId) {
+    loc = POWER_LOCATIONS.find(l => l.locationId === resolvedLocId);
+    if (!loc) {
+      if (locationId) {
+        throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+      }
+    }
+    if (loc && !loc.services.includes('missions')) {
+      if (locationId) {
+        throw new GameError('LOCATION_MISSIONS_NOT_AVAILABLE', `Missions are not available at ${loc.name}.`);
+      }
     }
 
     const actionCtx: ActionContext = {
@@ -514,19 +563,61 @@ export function generateMissionOffers(
       dirty: false,
       markDirty: () => {}
     };
-    const positions = buildServicePositions(loc, state.world.actors, actionCtx, playerId);
+    
+    const positions = loc ? buildServicePositions(loc, state.world.actors, actionCtx, playerId) : [];
     const pos = positions.find(p => p.service === 'missions');
 
-    sourceLocationId = loc.locationId;
-    sourceLocationName = loc.name;
-    sourcePositionId = pos?.positionId;
-    resolvedIssuerActorId = pos?.occupant.actorId;
-    issuerDisplayName = pos?.occupant.displayName;
-    issuerTitle = pos?.title;
-    issuerFaction = loc.ownerFaction;
+    let chosenActor: WorldActor | undefined = undefined;
+    if (issuerActorId) {
+      chosenActor = state.world.actors?.find(a => a.actorId === issuerActorId);
+    }
+    if (!chosenActor && pos?.occupant.actorId) {
+      chosenActor = state.world.actors?.find(a => a.actorId === pos.occupant.actorId);
+    }
+
+    if (chosenActor) {
+      const actorPos = positions.find(p => p.occupant.actorId === chosenActor.actorId);
+      issuerActor = {
+        actorId: chosenActor.actorId,
+        kind: chosenActor.kind,
+        displayName: chosenActor.displayName,
+        avatarId: getActorAvatarId(chosenActor, state),
+        level: chosenActor.level,
+        faction: chosenActor.faction,
+        powerShare: chosenActor.powerShare,
+        title: actorPos?.title || pos?.title,
+        positionId: actorPos?.positionId || pos?.positionId,
+        locationId: loc?.locationId,
+        locationName: loc?.name,
+      };
+
+      sourceLocationId = loc?.locationId;
+      sourceLocationName = loc?.name;
+      sourcePositionId = actorPos?.positionId || pos?.positionId;
+      resolvedIssuerActorId = chosenActor.actorId;
+      issuerDisplayName = chosenActor.displayName;
+      issuerTitle = actorPos?.title || pos?.title;
+      issuerFaction = loc?.ownerFaction;
+    }
+  } else if (issuerActorId) {
+    const chosenActor = state.world.actors?.find(a => a.actorId === issuerActorId);
+    if (chosenActor) {
+      issuerActor = {
+        actorId: chosenActor.actorId,
+        kind: chosenActor.kind,
+        displayName: chosenActor.displayName,
+        avatarId: getActorAvatarId(chosenActor, state),
+        level: chosenActor.level,
+        faction: chosenActor.faction,
+        powerShare: chosenActor.powerShare,
+      };
+      resolvedIssuerActorId = chosenActor.actorId;
+      issuerDisplayName = chosenActor.displayName;
+      issuerFaction = chosenActor.faction;
+    }
   }
 
-  const baseFaction: PowerFactionId = locationId ? (loc.ownerFaction as PowerFactionId) : playerFaction;
+  const baseFaction: PowerFactionId = loc ? (loc.ownerFaction as PowerFactionId) : playerFaction;
 
   const offers: MissionOffer[] = shuffledDurations.map(({ durationMin }, slotIndex) => {
     const baseDurationSec = durationMin * 60;
@@ -633,6 +724,8 @@ export function generateMissionOffers(
       issuerDisplayName,
       issuerTitle,
       issuerFaction,
+      // 新增 issuerActor
+      issuerActor,
     };
   });
 
@@ -641,10 +734,16 @@ export function generateMissionOffers(
   return offers;
 }
 
-export function buildActiveMissionView(activeMission: ActiveMission | null, now: number): ActiveMissionView | null {
+export function buildActiveMissionView(
+  activeMission: ActiveMission | null,
+  now: number,
+  state?: GameState,
+): ActiveMissionView | null {
   if (!activeMission) {
     return null;
   }
+
+  const refreshedIssuer = state ? refreshIssuerActor(activeMission.issuerActor, state) : activeMission.issuerActor;
 
   return {
     missionId: activeMission.missionId,
@@ -678,6 +777,8 @@ export function buildActiveMissionView(activeMission: ActiveMission | null, now:
     issuerDisplayName: activeMission.issuerDisplayName,
     issuerTitle: activeMission.issuerTitle,
     issuerFaction: activeMission.issuerFaction,
+    // 新增 issuerActor
+    issuerActor: refreshedIssuer,
   };
 }
 
@@ -689,14 +790,19 @@ export function buildTavernInfoData(state: GameState, now: number): TavernInfoDa
     ?? state.tavern.activeMission?.offerSetId
     ?? null;
 
+  const refreshedOffers = state.tavern.missionOffers.map(offer => ({
+    ...offer,
+    issuerActor: refreshIssuerActor(offer.issuerActor, state),
+  }));
+
   return {
     tavern: {
       status: getTavernStatus(state, now),
       thirstSecRemaining: state.tavern.thirstSecRemaining,
       drinksUsedToday: state.tavern.drinksUsedToday,
       firstMissionBonusAvailable: !state.tavern.firstMissionBonusClaimed,
-      missionOffers: state.tavern.missionOffers,
-      activeMission: buildActiveMissionView(state.tavern.activeMission, now),
+      missionOffers: refreshedOffers,
+      activeMission: buildActiveMissionView(state.tavern.activeMission, now, state),
       npcGreeting: currentOfferSetId ? buildNpcGreeting(currentOfferSetId) : null,
     },
     mount: {
@@ -732,7 +838,9 @@ export function getTavernInfo(
 
   if (getTavernStatus(ctx.state, ctx.now) === 'IDLE') {
     const needsRegen = ctx.state.tavern.missionOffers.length === 0 ||
-                      ctx.state.tavern.missionOffers[0]?.sourceLocationId !== locationId;
+                      ctx.state.tavern.missionOffers[0]?.sourceLocationId !== locationId ||
+                      ctx.state.tavern.missionOffers[0]?.sourcePositionId !== servicePositionId ||
+                      ctx.state.tavern.missionOffers[0]?.issuerActorId !== issuerActorId;
     if (needsRegen) {
       generateMissionOffers(ctx.state, ctx.now, locationId, servicePositionId, issuerActorId);
       ctx.markDirty();
@@ -755,7 +863,9 @@ export function generateMissions(
   const issuerActorId = payload.issuerActorId !== undefined ? String(payload.issuerActorId) : undefined;
 
   const needsRegen = ctx.state.tavern.missionOffers.length === 0 ||
-                    ctx.state.tavern.missionOffers[0]?.sourceLocationId !== locationId;
+                    ctx.state.tavern.missionOffers[0]?.sourceLocationId !== locationId ||
+                    ctx.state.tavern.missionOffers[0]?.sourcePositionId !== servicePositionId ||
+                    ctx.state.tavern.missionOffers[0]?.issuerActorId !== issuerActorId;
 
   if (needsRegen) {
     generateMissionOffers(ctx.state, ctx.now, locationId, servicePositionId, issuerActorId);

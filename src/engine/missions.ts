@@ -14,6 +14,7 @@ import type {
   PowerTransferResult,
   MissionTargetActorPreview,
   WorldActor,
+  MissionIssuerActorPreview,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
@@ -58,6 +59,8 @@ export type CompleteMissionData = {
   issuerDisplayName?: string;
   issuerTitle?: string;
   issuerFaction?: PowerFactionId;
+  // 任务发布人世界角色预览（任务发布人角色化 V1 新增）
+  issuerActor?: MissionIssuerActorPreview;
 };
 
 function emptyGrantedReward(): GrantedReward {
@@ -335,6 +338,8 @@ function buildCompleteMissionData(
     issuerDisplayName: settlement.issuerDisplayName,
     issuerTitle: settlement.issuerTitle,
     issuerFaction: settlement.issuerFaction,
+    // 新增 issuerActor
+    issuerActor: settlement.issuerActor,
   };
 }
 
@@ -447,6 +452,8 @@ export function startMission(
     issuerDisplayName: offer.issuerDisplayName,
     issuerTitle: offer.issuerTitle,
     issuerFaction: offer.issuerFaction,
+    // 新增 issuerActor
+    issuerActor: offer.issuerActor,
   };
 
   ctx.state.tavern.thirstSecRemaining -= offer.thirstCostSec;
@@ -541,6 +548,8 @@ export function completeMission(
     issuerDisplayName: activeMission.issuerDisplayName,
     issuerTitle: activeMission.issuerTitle,
     issuerFaction: activeMission.issuerFaction,
+    // 新增 issuerActor
+    issuerActor: activeMission.issuerActor,
   };
 
   activeMission.settlementStatus = 'SETTLED';

@@ -63,20 +63,26 @@
 #### EquipmentItem (物品模板)
 *   `id`: `string` - 唯一标识，格式：`eq_{slot}_{time36}_{rand16}`。
 *   `name`: `string` - 物品中文显示名称（如"陌刀"、"林教头的风雪毡帽"）。
-*   `description`: `string` - 黑色幽默风格的文案描述（非空）。
-*   `slot`: `EquipmentSlot` - 槽位（head, body, hands, feet, neck, belt, ring, trinket, weapon, offHand）。
-*   `rarity`: `0-4` - 品质（0:普通, 1:优秀, 2:史诗, 3:传说, 4:神器）。
-*   `subType`: `'weapon' | 'shield' | 'none'` - 物品子类型（影响 icon 与音效选择）。
-*   `armor?`: `number` - 防护值（仅 head/body/hands/feet/belt 槽位存在）。
-*   `weaponDamage?`: `{ min: number, max: number }` - 武器伤害区间（仅 weapon 槽及高品质 offHand 存在）。
-*   `price?`: `number` - 购买价格（铜钱），后端生成时计算好，前端直接展示。
-*   `sellPrice`: `number` - 售卖价格（铜钱）。即使是不在商店中的装备，此字段也必须存在，通常为 `price` 的 25%。
-*   `bonusAttributes`: `Partial<BaseAttributeValues>` - 装备提供的属性加成（只包含非零的五大属性）。
+*   `description`: `string` - 黑色幽默风格的文案�#### MissionOffer 阶段1增量、阶段6增量及任务发布场所/发布人角色化 V1 字段
+*   `powerContext?`: `MissionPowerContext` - 权力差事上下文（可选，阶段1新增）。
+*   `targetActor?`: `MissionTargetActorPreview` - 绑定的具体世界目标角色（可选，阶段6新增）。
+*   `issuerActor?`: `MissionIssuerActorPreview` - 发布任务的具体世界角色预览，其中 `actorId`, `kind`, `displayName`, `avatarId`, `level`, `faction`, `powerShare` 实时与 `world.actors` 强一致（可选，任务发布人角色化 V1 新增）。
+*   以及原有 7 个零散来源字段：`sourceLocationId`, `sourceLocationName`, `sourcePositionId`, `issuerActorId`, `issuerDisplayName`, `issuerTitle`, `issuerFaction`。
 
-> [!NOTE]
-> **前端图标寻址规则**（配合 `Asset_Naming_Convention.md` § 3.1）：
-> - `rarity 0-1`（普通/优秀）：图标路径 = `item_{slot}_{index}.png`，`index` 由 `parseInt(id.slice(-4), 16) % N + 1` 计算（N = 该槽位的变体图标数量）。
-> - `rarity 2+`（史诗/传说/神器）：图标路径 = `item_{id}.png` 直接寻址（需对应 ID 的专属美术图）。
+#### ActiveMission 阶段1增量、阶段6增量及任务发布场所/发布人角色化 V1 字段
+*   `powerContext?`: `MissionPowerContext` - 从对应 MissionOffer 携带，确保结算时不丢失。
+*   `targetActor?`: `MissionTargetActorPreview` - 绑定的具体世界目标角色，从 Offer 携带以确保稳定（可选，阶段6新增）。
+*   `issuerActor?`: `MissionIssuerActorPreview` - 从 Offer 携带的发布人角色预览，在返回视图时数据会与 `world.actors` 同步刷新（可选，任务发布人角色化 V1 新增）。
+*   以及上述 7 个零散来源字段。
+
+#### MissionSettlement 阶段1增量、阶段6增量及任务发布场所/发布人角色化 V1 字段
+*   `powerResult?`: 结算时的权力结果（阶段1新增，成功时才存在）：
+    *   `suspicionDelta`: 本次增加的疑心量。
+    *   `suspicionAfter`: 结算后全量疑心。
+    *   `powerTransfer`: 权柄转移详细结果（阶段5新增）。
+*   `targetActor?`: `MissionTargetActorPreview` - 本次任务绑定的具体目标角色预览，成功/失败均包含（可选，阶段6新增）。
+*   `issuerActor?`: `MissionIssuerActorPreview` - 从 ActiveMission 携带的发布人角色预览，成功/失败均包含，用于结算面板交差展示（可选，任务发布人角色化 V1 新增）。
+*   以及上述 7 个来源字段。接寻址（需对应 ID 的专属美术图）。
 
 ### 2.6 TavernState (酒馆系统)
 酒馆是当前最复杂的核心模块。
