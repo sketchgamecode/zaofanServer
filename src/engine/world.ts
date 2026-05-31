@@ -1,6 +1,6 @@
 import type { ActionSuccessResponse } from '../types/action.js';
 import type { ActionContext } from './actionContext.js';
-import type { CharacterInfoView, PlayerClassId, PowerFactionId, RaceId, WorldActor, PowerLocation, PowerLocationView, PowerLocationService, PowerLocationStatus, ServicePositionView, ServicePositionStatus, PowerTransferResult, WorldActorDetailView, ActorPositionSummary, WorldServicePositionListItem, MissionTargetActorPreview, MissionCaseType } from '../types/gameState.js';
+import type { CharacterInfoView, PlayerClassId, PowerFactionId, RaceId, WorldActor, PowerLocation, PowerLocationView, PowerLocationService, PowerLocationStatus, ServicePositionView, ServicePositionStatus, PowerTransferResult, WorldActorDetailView, ActorPositionSummary, WorldServicePositionListItem, MissionTargetActorPreview, MissionCaseType, ServicePositionControlProfile, OfficeKpiProfile, OfficeControlDetail, OfficeEligibility, OfficeLedgerEntryType, OfficeLedgerEntry, GameState, OfficeCandidateScoreItem, OfficeCandidateView, OfficeCandidateListView, ServicePositionCandidatesPreview } from '../types/gameState.js';
 import { RACE_CONFIGS } from '../config/raceConfig.js';
 import { GameError } from './errors.js';
 import { buildCharacterInfoView } from './character.js';
@@ -33,6 +33,7 @@ const LOCATIONS = [
   'wine_house',
   'bun_shop',
   'pleasure_quarter',
+  'ministry_of_personnel',
 ];
 
 const LOCATION_NAMES: Record<string, string> = {
@@ -49,6 +50,7 @@ const LOCATION_NAMES: Record<string, string> = {
   wine_house: '京城酒楼',
   bun_shop: '城门包子铺',
   pleasure_quarter: '教司坊',
+  ministry_of_personnel: '吏部衙门',
 };
 
 const LOCATION_DEFAULT_OWNER: Record<string, PowerFactionId> = {
@@ -65,6 +67,7 @@ const LOCATION_DEFAULT_OWNER: Record<string, PowerFactionId> = {
   wine_house: 'silver',
   bun_shop: 'underworld',
   pleasure_quarter: 'silver',
+  ministry_of_personnel: 'censorate',
 };
 
 export const POWER_LOCATIONS: PowerLocation[] = [
@@ -198,6 +201,16 @@ export const POWER_LOCATIONS: PowerLocation[] = [
     services: ['stamina', 'intel'],
     connectedLocationIds: ['imperial_palace', 'salt_merchant_guild'],
   },
+  {
+    locationId: 'ministry_of_personnel',
+    name: '吏部衙门',
+    ownerFaction: 'censorate',
+    x: 350,
+    y: 250,
+    unlockLevel: 10,
+    services: ['office_registry', 'appointment', 'evaluation'],
+    connectedLocationIds: ['imperial_palace', 'censorate'],
+  },
 ];
 
 const LOCATION_TRAVEL_COSTS: Record<string, number> = {
@@ -231,6 +244,13 @@ export function ensureWorldInitialized(ctx: ActionContext) {
   // 旧存档兼容：如果没有 world 对象，则初始化
   if (!ctx.state.world) {
     ctx.state.world = { status: 'UNINITIALIZED', actors: [] };
+  }
+
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+  if (!ctx.state.world.botSimulation) {
+    ctx.state.world.botSimulation = { lastSimulatedAt: 0 };
   }
 
   if (ctx.state.world.status === 'ACTIVE' && ctx.state.world.actors.length > 0) {
@@ -393,6 +413,9 @@ const POSITION_TITLE_BY_SERVICE: Record<PowerLocationService, string> = {
   intel: '消息书办',
   estate: '府邸管事',
   stamina: '补给掌柜',
+  office_registry: '文选名册掌籍',
+  appointment: '人事任命郎中',
+  evaluation: '考功主事',
 };
 
 /** 定制职务标题（locationId + service → 更具风味的头衔） */
@@ -415,6 +438,9 @@ const POSITION_TITLE_CUSTOM: Partial<Record<string, string>> = {
   'pleasure_quarter:intel': '坊中消息人',
   'imperial_palace:promotion': '内廷门房引见',
   'imperial_palace:intel': '内廷密探',
+  'ministry_of_personnel:office_registry': '吏部文选司郎中',
+  'ministry_of_personnel:appointment': '内廷批红中使',
+  'ministry_of_personnel:evaluation': '吏部考功司郎中',
 };
 
 const INCOME_HINT_BY_SERVICE: Record<PowerLocationService, string> = {
@@ -426,9 +452,55 @@ const INCOME_HINT_BY_SERVICE: Record<PowerLocationService, string> = {
   intel: '此职可掌握本处消息流，收益规则待开放。',
   estate: '此职可从府邸经营中获得产业收益，收益规则待开放。',
   stamina: '此职可从补给消费中抽取人情与银路收益，收益规则待开放。',
+  office_registry: '此职管理天下官员名册，可获取铨选人情，收益规则待开放。',
+  appointment: '此职代奏皇权特旨，主掌生死任免，收益规则待开放。',
+  evaluation: '此职考评天下官员功过，课税与权柄指标，收益规则待开放。',
 };
 
 const REPLACE_HINT = '达到等级、派系关系和地点贡献要求后，后续可争夺此职。';
+
+const FACTION_CONTROL_PROFILES: Record<PowerFactionId, ServicePositionControlProfile> = {
+  imperial: {
+    appointmentControllerLabel: '上意与内廷批红',
+    financeControllerLabel: '内库、司礼监与赏赐账',
+    paylineHint: '银钱先入内廷账面，再按圣眷与差遣发放。',
+    loyaltyCostHint: '听旨、保密、背锅，不能质疑来路。',
+  },
+  noble: {
+    appointmentControllerLabel: '国公府门第与家将旧账',
+    financeControllerLabel: '庄田、军功旧饷与门客份例',
+    paylineHint: '俸禄多经府中管事转发，厚薄看门第亲疏。',
+    loyaltyCostHint: '护门第、站旧功、替恩主挡清算。',
+  },
+  censorate: {
+    appointmentControllerLabel: '座师、同年与清议名分',
+    financeControllerLabel: '清贵俸银、门生馈赠与案牍经费',
+    paylineHint: '账面清白，实际靠座师保举和同年周转。',
+    loyaltyCostHint: '守名声、听师门、必要时递弹章。',
+  },
+  border: {
+    appointmentControllerLabel: '总兵、把总与家丁军头',
+    financeControllerLabel: '军粮、军饷、赏银与边镇私账',
+    paylineHint: '饷银层层下拨，克扣与拖欠都写在边账里。',
+    loyaltyCostHint: '服军令、交战功、别让中枢觉得尾大不掉。',
+  },
+  silver: {
+    appointmentControllerLabel: '盐商首总、织造买办与牙行保人',
+    financeControllerLabel: '盐引、贡品、账房银路与交易抽成',
+    paylineHint: '银路由账房放款，返多少看保人和账面余银。',
+    loyaltyCostHint: '纳份例、走银路、替后台遮账。',
+  },
+  underworld: {
+    appointmentControllerLabel: '香头、脚夫帮主与暗线保人',
+    financeControllerLabel: '口粮、赃货、脚钱与藏匿份子',
+    paylineHint: '底层先交粮交货，回款多少全看头目分配。',
+    loyaltyCostHint: '听招呼、守暗号、出事先扛雷。',
+  },
+};
+
+export function getFactionControlProfile(faction: PowerFactionId): ServicePositionControlProfile {
+  return FACTION_CONTROL_PROFILES[faction] ?? FACTION_CONTROL_PROFILES.imperial;
+}
 
 export function buildServicePositions(
   loc: PowerLocation,
@@ -479,6 +551,7 @@ export function buildServicePositions(
         level: occupantActor.level,
         powerShare: occupantActor.powerShare,
       },
+      controlProfile: getFactionControlProfile(loc.ownerFaction),
     });
   }
 
@@ -491,6 +564,7 @@ export async function worldLocationsGetStatus(
 ): Promise<ActionSuccessResponse<{ locations: PowerLocationView[] }>> {
   ensureWorldInitialized(ctx);
   syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
 
   const actors = ctx.state.world.actors;
   const { byLocationMap } = aggregateWorldActors(actors);
@@ -671,6 +745,7 @@ export function applyWorldPowerTransfer(
     targetFactionIds?: PowerFactionId[];
     issuerFactionId: PowerFactionId;
     targetActorId?: string;
+    beneficiaryActorId?: string;
   }
 ): PowerTransferResult {
   ensureWorldInitialized(ctx);
@@ -768,8 +843,16 @@ export function applyWorldPowerTransfer(
 
   const actualDeducted = amount - remainingDeduct;
 
-  // 4. Increase player's powerShare by actualDeducted
-  playerActor.powerShare += actualDeducted;
+  // 4. Increase player or beneficiary's powerShare by actualDeducted
+  const beneficiaryActor = options.beneficiaryActorId
+    ? ctx.state.world.actors.find(a => a.actorId === options.beneficiaryActorId)
+    : undefined;
+
+  if (beneficiaryActor) {
+    beneficiaryActor.powerShare += actualDeducted;
+  } else {
+    playerActor.powerShare += actualDeducted;
+  }
 
   // Mark state dirty
   ctx.markDirty();
@@ -830,6 +913,9 @@ const SERVICE_LABEL: Record<PowerLocationService, string> = {
   intel: '情报',
   estate: '产业',
   stamina: '补给',
+  office_registry: '吏籍',
+  appointment: '任免',
+  evaluation: '考功',
 };
 
 const FACTION_LABEL: Record<PowerFactionId, string> = {
@@ -1021,6 +1107,7 @@ export async function worldServicePositionsGetList(
 ): Promise<ActionSuccessResponse<{ positions: WorldServicePositionListItem[] }>> {
   ensureWorldInitialized(ctx);
   syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
 
   const filterLocationId = typeof payload.locationId === 'string' ? payload.locationId : undefined;
   const filterFaction = typeof payload.faction === 'string' ? payload.faction as PowerFactionId : undefined;
@@ -1057,6 +1144,7 @@ export async function worldServicePositionsGetList(
         incomeHint: pos.incomeHint,
         replaceHint: pos.replaceHint,
         status: pos.status,
+        controlProfile: pos.controlProfile,
       });
     }
   }
@@ -1255,5 +1343,738 @@ export function selectMissionTargetActor(
     title: posInfo?.title,
     positionId: posInfo?.positionId,
     reason,
+  };
+}
+
+export function canImperialOverrideReplace(currentHolder: WorldActor, candidate: WorldActor): boolean {
+  return candidate.powerShare > currentHolder.powerShare;
+}
+
+export async function worldServicePositionGetDetail(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<{
+  position: ServicePositionView;
+  occupant: ServicePositionView['occupant'];
+  location: {
+    locationId: string;
+    name: string;
+    ownerFaction: PowerFactionId;
+    unlockLevel: number;
+  };
+  service: PowerLocationService;
+  incomeHint: string;
+  replaceHint: string;
+  controlProfile?: ServicePositionControlProfile;
+  kpiProfile: OfficeKpiProfile;
+  controlDetail: OfficeControlDetail;
+  eligibility: OfficeEligibility;
+  imperialOverrideHint: string;
+  ledgerPreview: OfficeLedgerEntry[];
+  candidatesPreview?: ServicePositionCandidatesPreview;
+}>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+
+  const positionId = typeof payload.positionId === 'string' ? payload.positionId : '';
+  if (!positionId) {
+    throw new GameError('POSITION_ID_REQUIRED', 'Position ID is required.');
+  }
+
+  let foundPos: ServicePositionView | undefined;
+  let foundLoc: PowerLocation | undefined;
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const actors = ctx.state.world.actors;
+
+  for (const loc of POWER_LOCATIONS) {
+    const positions = buildServicePositions(loc, actors, ctx, playerActorId);
+    const pos = positions.find(p => p.positionId === positionId);
+    if (pos) {
+      foundPos = pos;
+      foundLoc = loc;
+      break;
+    }
+  }
+
+  if (!foundPos || !foundLoc) {
+    throw new GameError('POSITION_NOT_FOUND', `Position ${positionId} not found.`);
+  }
+
+  const loc = foundLoc;
+  const pos = foundPos;
+
+  // 1. KPI Profile (derived)
+  const isKpiMet = pos.occupant.powerShare >= 300;
+  const taxDuePerTerm = Math.max(500, loc.unlockLevel * 150);
+  const taxDeliveredThisTerm = isKpiMet ? taxDuePerTerm : Math.max(100, Math.floor(taxDuePerTerm * 0.35));
+  const powerDuePerTerm = Math.max(10, loc.unlockLevel * 2);
+  const powerDeliveredThisTerm = isKpiMet ? powerDuePerTerm : Math.max(2, Math.floor(powerDuePerTerm * 0.2));
+
+  const kpiProfile: OfficeKpiProfile = {
+    termStartsAt: ctx.now - 3 * 24 * 3600 * 1000,
+    termEndsAt: ctx.now + 4 * 24 * 3600 * 1000,
+    taxDuePerTerm,
+    taxDeliveredThisTerm,
+    powerDuePerTerm,
+    powerDeliveredThisTerm,
+  };
+
+  // 2. Control Detail (derived)
+  const factionActors = actors
+    .filter(a => a.faction === loc.ownerFaction)
+    .sort((a, b) => b.powerShare - a.powerShare);
+
+  const topActor = factionActors[0];
+  const secondActor = factionActors[1] ?? factionActors[0];
+
+  const treasurySplits: Record<PowerFactionId, any> = {
+    imperial: { imperialPrivatePct: 50, publicTreasuryPct: 10, officeHolderPct: 20, superiorPct: 20 },
+    noble: { imperialPrivatePct: 10, publicTreasuryPct: 10, officeHolderPct: 30, superiorPct: 50 },
+    censorate: { imperialPrivatePct: 5, publicTreasuryPct: 45, officeHolderPct: 30, superiorPct: 20 },
+    border: { imperialPrivatePct: 5, publicTreasuryPct: 15, officeHolderPct: 30, superiorPct: 50 },
+    silver: { imperialPrivatePct: 15, publicTreasuryPct: 20, officeHolderPct: 30, superiorPct: 35 },
+    underworld: { imperialPrivatePct: 0, publicTreasuryPct: 5, officeHolderPct: 30, superiorPct: 65 },
+  };
+
+  const treasurySplit = treasurySplits[loc.ownerFaction] ?? {
+    imperialPrivatePct: 10,
+    publicTreasuryPct: 30,
+    officeHolderPct: 30,
+    superiorPct: 30,
+  };
+
+  const controlDetail: OfficeControlDetail = {
+    appointmentControllerActorId: topActor?.actorId,
+    appointmentControllerDisplayName: topActor?.displayName,
+    financeControllerActorId: secondActor?.actorId,
+    financeControllerDisplayName: secondActor?.displayName,
+    treasurySplit,
+  };
+
+  // 3. Eligibility (derived)
+  const reasons: string[] = [];
+  const playerActor = actors.find(a => a.actorId === playerActorId);
+  const playerPower = playerActor?.powerShare ?? 0;
+
+  if (pos.occupant.actorId === playerActorId) {
+    reasons.push('您当前已担任此职，无需重复谋求。');
+  }
+  if (ctx.state.player.level < loc.unlockLevel) {
+    reasons.push(`等级未达到职位最低等级要求（需要等级 ${loc.unlockLevel}，您当前为 ${ctx.state.player.level} 级）。`);
+  }
+  if (playerPower <= pos.occupant.powerShare) {
+    reasons.push(`您的在野权柄不足，您的权柄（${playerPower}）必须超过当前任职者的权柄（${pos.occupant.powerShare}）才可发起弹劾或谋求任用。`);
+  }
+
+  const playerFaction = ctx.state.player.powerFaction;
+  if (playerFaction !== loc.ownerFaction) {
+    const requiredFactionName = FACTION_LABEL[loc.ownerFaction] ?? loc.ownerFaction;
+    const currentFactionName = playerFaction ? (FACTION_LABEL[playerFaction] ?? playerFaction) : '无门派';
+    reasons.push(`派系背景不符，该职位属于「${requiredFactionName}」派系，您当前派系背景为「${currentFactionName}」。`);
+  }
+
+  const canBeConsidered = reasons.length === 0;
+  const eligibility: OfficeEligibility = {
+    canBeConsidered,
+    reasons,
+  };
+
+  // 4. Imperial override logic (天子特旨)
+  const currentHolderActor = actors.find(a => a.actorId === pos.occupant.actorId);
+  const canImperialOverride = currentHolderActor && playerActor
+    ? canImperialOverrideReplace(currentHolderActor, playerActor)
+    : false;
+
+  const currentHolderPower = pos.occupant.powerShare;
+  const imperialOverrideHint = canImperialOverride
+    ? `天子特旨可用：您当前的权柄（${playerPower}）已高于现任者（${currentHolderPower}），可在吏部通过“内廷批红中使”请求皇帝特旨强换此职！`
+    : `天子特旨暂不可用：您的权柄（${playerPower}）必须高于现任者（${currentHolderPower}）才可启用批红强换机制。`;
+
+  return {
+    ok: true,
+    action: 'WORLD_SERVICE_POSITION_GET_DETAIL',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      position: pos,
+      occupant: pos.occupant,
+      location: {
+        locationId: loc.locationId,
+        name: loc.name,
+        ownerFaction: loc.ownerFaction,
+        unlockLevel: loc.unlockLevel,
+      },
+      service: pos.service,
+      incomeHint: pos.incomeHint,
+      replaceHint: pos.replaceHint,
+      controlProfile: pos.controlProfile,
+      kpiProfile,
+      controlDetail,
+      eligibility,
+      imperialOverrideHint,
+      ledgerPreview: (ctx.state.world.officeLedger ?? [])
+        .filter((e: any) => e.positionId === positionId)
+        .slice(-5)
+        .reverse(),
+      candidatesPreview: (() => {
+        const list = buildOfficeCandidateListView(ctx, positionId, 8);
+        const topCandidate = list.candidates[0];
+        return {
+          currentPlayerRank: list.currentPlayerRank,
+          topCandidate,
+          advice: list.plottingAdvice.slice(0, 3),
+        };
+      })(),
+    },
+  };
+}
+
+export function writeOfficeLedgerFromMission(
+  ctx: ActionContext,
+  activeMission: any,
+  officeSettlement: any
+) {
+  ensureWorldInitialized(ctx);
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+
+  const playerDisplayName = ctx.state.player.displayName || '玩家';
+  const targetDisplayName = activeMission.targetActor?.displayName || '嫌疑人';
+  const beneficiaryDisplayName = officeSettlement.beneficiaryDisplayName || '主管';
+  
+  const locId = activeMission.sourceLocationId || '';
+  const posId = officeSettlement.sourcePositionId || `${locId}:missions`;
+  const customTitle = POSITION_TITLE_CUSTOM[posId];
+  const posTitle = customTitle ?? POSITION_TITLE_BY_SERVICE['missions'] ?? '主管';
+  const beneficiaryLabel = `${posTitle}${beneficiaryDisplayName}`;
+
+  let description = '';
+  if (officeSettlement.powerValueDelta && officeSettlement.powerValueDelta > 0) {
+    const powerPct = (officeSettlement.powerValueDelta / 100).toFixed(2);
+    description = `${playerDisplayName}奉命缉拿${targetDisplayName}，${beneficiaryLabel}得权柄 ${powerPct}%。`;
+  } else if (officeSettlement.taxValueDelta && officeSettlement.taxValueDelta > 0) {
+    description = `${playerDisplayName}完成${activeMission.title}，${beneficiaryLabel}入税钱 ${officeSettlement.taxValueDelta}。`;
+  } else {
+    description = `${playerDisplayName}完成${activeMission.title}，${beneficiaryLabel}所得。`;
+  }
+
+  const entry: OfficeLedgerEntry = {
+    entryId: `ledger_${ctx.now}_mission_${activeMission.missionId}`,
+    createdAt: ctx.now,
+    positionId: posId,
+    locationId: locId,
+    service: 'missions',
+    beneficiaryActorId: officeSettlement.beneficiaryActorId,
+    beneficiaryDisplayName: officeSettlement.beneficiaryDisplayName,
+    sourceActorId: `player:${ctx.playerId}`,
+    sourceActorDisplayName: playerDisplayName,
+    targetActorId: activeMission.targetActor?.actorId,
+    targetActorDisplayName: activeMission.targetActor?.displayName,
+    type: officeSettlement.powerValueDelta && officeSettlement.powerValueDelta > 0 ? 'mission_power' : 'mission_tax',
+    powerValueDelta: officeSettlement.powerValueDelta || 0,
+    taxValueDelta: officeSettlement.taxValueDelta || 0,
+    description,
+  };
+
+  ctx.state.world.officeLedger.push(entry);
+  if (ctx.state.world.officeLedger.length > 200) {
+    ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+  }
+  ctx.markDirty();
+}
+
+export function simulateWorldBotOfficeActivity(state: GameState, now: number): OfficeLedgerEntry[] {
+  if (!state.world.botSimulation) {
+    state.world.botSimulation = { lastSimulatedAt: 0 };
+  }
+  
+  const rng = mulberry32(now || 12345);
+  function choose<T>(arr: T[]): T {
+    const idx = Math.floor(rng() * arr.length);
+    return arr[idx];
+  }
+
+  const locCount = 3 + Math.floor(rng() * 6); // 3 to 8
+  const availableLocations = POWER_LOCATIONS.filter(loc => loc.services.length > 0);
+  
+  const shuffledLocs = [...availableLocations];
+  for (let i = shuffledLocs.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const temp = shuffledLocs[i];
+    shuffledLocs[i] = shuffledLocs[j];
+    shuffledLocs[j] = temp;
+  }
+  
+  const selectedLocs = shuffledLocs.slice(0, Math.min(locCount, shuffledLocs.length));
+  const newEntries: OfficeLedgerEntry[] = [];
+  const actors = state.world.actors;
+  
+  let idCounter = 1;
+  const generateEntryId = () => {
+    return `ledger_${now}_sim_${idCounter++}`;
+  };
+
+  const tempCtx: ActionContext = {
+    playerId: 'default-player',
+    now,
+    state,
+    get dirty() { return false; },
+    markDirty() {}
+  };
+  const playerActorId = `player:default-player`;
+
+  for (const loc of selectedLocs) {
+    const service = choose(loc.services);
+    const positionId = `${loc.locationId}:${service}`;
+    
+    const positions = buildServicePositions(loc, actors, tempCtx, playerActorId);
+    const pos = positions.find(p => p.service === service);
+    if (!pos) continue;
+    
+    const beneficiary = pos.occupant;
+    
+    if (loc.locationId === 'northern_bureau' && service === 'missions') {
+      const possibleTargets = actors.filter(a => a.kind === 'bot' && a.actorId !== beneficiary.actorId && a.powerShare > 10);
+      if (possibleTargets.length > 0) {
+        const targetActor = choose(possibleTargets);
+        const powerDelta = Math.floor(rng() * 4) + 2; // 2 to 5 points
+        
+        const targetInWorld = actors.find(a => a.actorId === targetActor.actorId);
+        const beneficiaryInWorld = actors.find(a => a.actorId === beneficiary.actorId);
+        
+        if (targetInWorld && beneficiaryInWorld) {
+          const actualPower = Math.min(powerDelta, targetInWorld.powerShare - 1);
+          if (actualPower > 0) {
+            targetInWorld.powerShare -= actualPower;
+            beneficiaryInWorld.powerShare += actualPower;
+            
+            const powerPct = (actualPower / 100).toFixed(2);
+            const sourceActor = choose(actors.filter(a => a.kind === 'bot' && a.locationId === loc.locationId)) ?? choose(actors.filter(a => a.kind === 'bot'));
+            
+            const entry: OfficeLedgerEntry = {
+              entryId: generateEntryId(),
+              createdAt: now,
+              positionId,
+              locationId: loc.locationId,
+              service,
+              beneficiaryActorId: beneficiary.actorId,
+              beneficiaryDisplayName: beneficiary.displayName,
+              sourceActorId: sourceActor.actorId,
+              sourceActorDisplayName: sourceActor.displayName,
+              targetActorId: targetInWorld.actorId,
+              targetActorDisplayName: targetInWorld.displayName,
+              type: 'bot_power',
+              powerValueDelta: actualPower,
+              taxValueDelta: 0,
+              description: `${sourceActor.displayName}奉命缉拿${targetInWorld.displayName}，${pos.title}${beneficiary.displayName}得权柄 ${powerPct}%。`,
+            };
+            newEntries.push(entry);
+          }
+        }
+      }
+    } else {
+      const taxAmount = Math.floor(rng() * 150) + 10;
+      const sourceActor = choose(actors.filter(a => a.kind === 'bot' && a.locationId === loc.locationId)) ?? choose(actors.filter(a => a.kind === 'bot'));
+      
+      let type: OfficeLedgerEntryType = 'bot_tax';
+      let description = '';
+      
+      if (service === 'shop') {
+        type = 'shop_tax';
+        const actionText = choose([
+          '完成交易采购',
+          '采办御用珍玩',
+          '交易漕运物资',
+          '采办贡品物资',
+          '交易盐铁货物'
+        ]);
+        description = `${sourceActor.displayName}${actionText}，${pos.title}${beneficiary.displayName}进税钱 ${taxAmount}。`;
+      } else if (service === 'stamina') {
+        type = 'stamina_tax';
+        const actionText = choose([
+          '享用歇息茶水',
+          '享用强身药膳',
+          '投宿馆驿歇脚',
+          '沐浴更衣修整'
+        ]);
+        description = `${sourceActor.displayName}${actionText}，${pos.title}${beneficiary.displayName}进账 ${taxAmount}。`;
+      } else {
+        type = 'bot_tax';
+        const actionText = choose([
+          '完成差事巡逻',
+          '筹办灾民赈济',
+          '递送紧急公文',
+          '修缮城门工事',
+          '押运漕银税款'
+        ]);
+        description = `${sourceActor.displayName}${actionText}，${pos.title}${beneficiary.displayName}进税钱 ${taxAmount}。`;
+      }
+      
+      const entry: OfficeLedgerEntry = {
+        entryId: generateEntryId(),
+        createdAt: now,
+        positionId,
+        locationId: loc.locationId,
+        service,
+        beneficiaryActorId: beneficiary.actorId,
+        beneficiaryDisplayName: beneficiary.displayName,
+        sourceActorId: sourceActor.actorId,
+        sourceActorDisplayName: sourceActor.displayName,
+        type,
+        taxValueDelta: taxAmount,
+        powerValueDelta: 0,
+        description,
+      };
+      newEntries.push(entry);
+    }
+  }
+
+  return newEntries;
+}
+
+export function triggerBotSimulationIfNeeded(ctx: ActionContext) {
+  ensureWorldInitialized(ctx);
+  if (!ctx.state.world.botSimulation) {
+    ctx.state.world.botSimulation = { lastSimulatedAt: 0 };
+  }
+  const now = ctx.now;
+  const lastSimulatedAt = ctx.state.world.botSimulation.lastSimulatedAt;
+  const SIMULATION_INTERVAL_MS = 600 * 1000; // 10 minutes
+  if (now - lastSimulatedAt >= SIMULATION_INTERVAL_MS) {
+    ctx.state.world.botSimulation.lastSimulatedAt = now;
+    const newEntries = simulateWorldBotOfficeActivity(ctx.state, now);
+    if (newEntries.length > 0) {
+      if (!ctx.state.world.officeLedger) {
+        ctx.state.world.officeLedger = [];
+      }
+      ctx.state.world.officeLedger.push(...newEntries);
+      if (ctx.state.world.officeLedger.length > 200) {
+        ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+      }
+    }
+    ctx.markDirty();
+  }
+}
+
+export async function worldServicePositionLedgerGet(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<{ entries: OfficeLedgerEntry[] }>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+
+  const positionId = typeof payload.positionId === 'string' ? payload.positionId : undefined;
+  const actorId = typeof payload.actorId === 'string' ? payload.actorId : undefined;
+  let limit = typeof payload.limit === 'number' ? payload.limit : 20;
+  if (limit <= 0) limit = 20;
+  if (limit > 50) limit = 50;
+
+  let filtered = ctx.state.world.officeLedger ?? [];
+
+  if (positionId) {
+    filtered = filtered.filter(e => e.positionId === positionId);
+  } else if (actorId) {
+    filtered = filtered.filter(e => e.beneficiaryActorId === actorId);
+  }
+
+  const entries = filtered.slice(-limit).reverse();
+
+  return {
+    ok: true,
+    action: 'WORLD_SERVICE_POSITION_LEDGER_GET',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      entries,
+    },
+  };
+}
+
+const FACTION_ALLIES: Record<PowerFactionId, PowerFactionId[]> = {
+  imperial: ['noble'],
+  noble: ['imperial'],
+  censorate: ['border'],
+  border: ['censorate'],
+  silver: ['underworld'],
+  underworld: ['silver'],
+};
+
+export function evaluateOfficeCandidate(
+  candidateActor: WorldActor,
+  position: ServicePositionView,
+  loc: PowerLocation,
+  incumbent: { actorId: string; powerShare: number },
+  isCurrentPlayer: boolean,
+  ctx: ActionContext
+): OfficeCandidateView {
+  const isIncumbent = candidateActor.actorId === incumbent.actorId;
+  const isKpiMet = incumbent.powerShare >= 300;
+
+  // 1. 等级门槛 (20分)
+  const minLevel = position.minLevel;
+  const levelPassed = candidateActor.level >= minLevel;
+  const levelScore = levelPassed ? 20 : Math.floor((candidateActor.level / minLevel) * 20);
+  const levelHint = levelPassed
+    ? `等级已达标（得 20 分）`
+    : `等级未达标，需达到 ${minLevel} 级（当前为 ${candidateActor.level} 级，得 ${levelScore} 分）`;
+
+  // 2. 权柄 (30分)
+  const incumbentPower = incumbent.powerShare;
+  let powerScore = 0;
+  let powerPassed = false;
+  if (isIncumbent) {
+    powerScore = 30;
+    powerPassed = true;
+  } else {
+    powerPassed = candidateActor.powerShare >= incumbentPower;
+    powerScore = powerPassed
+      ? 30
+      : (incumbentPower > 0 ? Math.floor((candidateActor.powerShare / incumbentPower) * 30) : 30);
+  }
+  const powerHint = powerPassed
+    ? `在野权柄高于或等于现任者（得 30 分）`
+    : `在野权柄不足，差 ${incumbentPower - candidateActor.powerShare} 点（当前为 ${candidateActor.powerShare}，现任为 ${incumbentPower}，得 ${powerScore} 分）`;
+
+  // 3. 派系匹配 (20分)
+  const isSameFaction = candidateActor.faction === position.ownerFaction;
+  const isAllyFaction = !isSameFaction && FACTION_ALLIES[position.ownerFaction]?.includes(candidateActor.faction);
+  const factionScore = isSameFaction ? 20 : (isAllyFaction ? 10 : 0);
+  const factionPassed = isSameFaction || isAllyFaction;
+  const factionHint = isSameFaction
+    ? `派系完全匹配（得 20 分）`
+    : (isAllyFaction
+        ? `派系相近，可获折半推荐（当前为「${FACTION_LABEL[candidateActor.faction]}」，得 10 分）`
+        : `派系不合，此职位归属「${FACTION_LABEL[position.ownerFaction]}」派系（当前为「${FACTION_LABEL[candidateActor.faction]}」，得 0 分）`);
+
+  // 4. KPI 机会 (15分)
+  let kpiScore = 0;
+  let kpiPassed = false;
+  if (isIncumbent) {
+    kpiScore = isKpiMet ? 15 : 0;
+    kpiPassed = isKpiMet;
+  } else {
+    kpiScore = isKpiMet ? 0 : 15;
+    kpiPassed = !isKpiMet;
+  }
+  const kpiHint = isIncumbent
+    ? (isKpiMet ? `现任 KPI 考核已达标，位置稳固（得 15 分）` : `现任 KPI 未达标，存在弹劾动摇（得 0 分）`)
+    : (isKpiMet ? `现任官员本期 KPI 达标，暂难撬动（得 0 分）` : `现任官员本期 KPI 未达标，存在弹劾空间（得 15 分）`);
+
+  // 5. 职务适配 (15分)
+  const fitScore = Math.min(15, Math.floor((candidateActor.level / (minLevel + 5)) * 15));
+  const fitPassed = fitScore >= 10;
+  const fitHint = `职务适配度评估：${fitScore === 15 ? '完美适配' : fitScore >= 10 ? '高度适配' : '适配度一般'}（得 ${fitScore} 分）`;
+
+  const totalScore = levelScore + powerScore + factionScore + kpiScore + fitScore;
+
+  const scoreBreakdown: OfficeCandidateScoreItem[] = [
+    { label: '等级门槛', value: levelScore, passed: levelPassed, hint: levelHint },
+    { label: '在野权柄', value: powerScore, passed: powerPassed, hint: powerHint },
+    { label: '派系匹配', value: factionScore, passed: factionPassed, hint: factionHint },
+    { label: 'KPI机会', value: kpiScore, passed: kpiPassed, hint: kpiHint },
+    { label: '职务适配', value: fitScore, passed: fitPassed, hint: fitHint },
+  ];
+
+  // Current player recommendation logic
+  let recommendation = '';
+  if (isIncumbent) {
+    recommendation = '您当前已担任此职。请继续保持优异的 KPI 指标以防弹劾。';
+  } else if (!levelPassed) {
+    recommendation = `等级未达标，建议优先提升等级至 ${minLevel} 级。`;
+  } else if (!factionPassed) {
+    recommendation = `派系不合，该职位由「${FACTION_LABEL[position.ownerFaction]}」掌控，需改换门路或依附其人事主管。`;
+  } else if (!powerPassed) {
+    if (position.locationId === 'northern_bureau') {
+      recommendation = '权柄低于现任，北镇抚司职位可通过执行该处差事削弱对手权柄。';
+    } else {
+      recommendation = '等级足够，但权柄低于现任，建议先去相关地点承接差事夺取权柄。';
+    }
+  } else if (isKpiMet) {
+    recommendation = '您当前的权柄已高于现任，但现任本期 KPI 达标。可等待考功期，或在吏部寻求天子特旨强换。';
+  } else {
+    recommendation = '现任本期 KPI 未达标，且您的权柄已超越现任，大有可为！可在吏部寻求调换或等待每周考功弹劾。';
+  }
+
+  const combatRating = candidateActor.combatSnapshot?.equipmentSummary?.itemPowerTotal
+    ? (candidateActor.combatSnapshot.equipmentSummary.itemPowerTotal + candidateActor.level * 10)
+    : (candidateActor.level * 10);
+
+  return {
+    actorId: candidateActor.actorId,
+    kind: candidateActor.kind,
+    displayName: candidateActor.displayName,
+    avatarId: getActorAvatarId(candidateActor, ctx),
+    level: candidateActor.level,
+    faction: candidateActor.faction,
+    powerShare: candidateActor.powerShare,
+    combatRating,
+    isCurrentPlayer,
+    score: totalScore,
+    scoreBreakdown,
+    recommendation,
+  };
+}
+
+export function buildOfficeCandidateListView(
+  ctx: ActionContext,
+  positionId: string,
+  limit: number = 8
+): OfficeCandidateListView {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+
+  let foundPos: ServicePositionView | undefined;
+  let foundLoc: PowerLocation | undefined;
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const actors = ctx.state.world.actors;
+
+  for (const loc of POWER_LOCATIONS) {
+    const positions = buildServicePositions(loc, actors, ctx, playerActorId);
+    const pos = positions.find(p => p.positionId === positionId);
+    if (pos) {
+      foundPos = pos;
+      foundLoc = loc;
+      break;
+    }
+  }
+
+  if (!foundPos || !foundLoc) {
+    throw new GameError('POSITION_NOT_FOUND', `Position ${positionId} not found.`);
+  }
+
+  const loc = foundLoc;
+  const pos = foundPos;
+
+  const incumbentActor = actors.find(a => a.actorId === pos.occupant.actorId) ?? actors.find(a => a.locationId === loc.locationId) ?? actors[0]!;
+  const incumbentView = evaluateOfficeCandidate(incumbentActor, pos, loc, { actorId: incumbentActor.actorId, powerShare: incumbentActor.powerShare }, incumbentActor.actorId === playerActorId, ctx);
+
+  const candidateActorsList: WorldActor[] = [];
+  const addedActorIds = new Set<string>([incumbentActor.actorId]);
+
+  const playerActor = actors.find(a => a.actorId === playerActorId);
+  if (playerActor && !addedActorIds.has(playerActor.actorId)) {
+    candidateActorsList.push(playerActor);
+    addedActorIds.add(playerActor.actorId);
+  }
+
+  const sameLocFaction = actors.filter(a => a.locationId === loc.locationId && a.faction === loc.ownerFaction && !addedActorIds.has(a.actorId));
+  for (const a of sameLocFaction) {
+    candidateActorsList.push(a);
+    addedActorIds.add(a.actorId);
+  }
+
+  const sameFaction = actors.filter(a => a.faction === loc.ownerFaction && !addedActorIds.has(a.actorId));
+  for (const a of sameFaction) {
+    candidateActorsList.push(a);
+    addedActorIds.add(a.actorId);
+  }
+
+  const others = actors.filter(a => !addedActorIds.has(a.actorId));
+  for (const a of others) {
+    candidateActorsList.push(a);
+    addedActorIds.add(a.actorId);
+  }
+
+  const evaluatedCandidates = candidateActorsList.map(actor => {
+    return evaluateOfficeCandidate(actor, pos, loc, { actorId: incumbentActor.actorId, powerShare: incumbentActor.powerShare }, actor.actorId === playerActorId, ctx);
+  });
+
+  evaluatedCandidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.powerShare !== a.powerShare) return b.powerShare - a.powerShare;
+    if (b.level !== a.level) return b.level - a.level;
+    return a.actorId.localeCompare(b.actorId);
+  });
+
+  let currentPlayerView: OfficeCandidateView | undefined;
+  if (playerActor) {
+    if (playerActor.actorId === incumbentActor.actorId) {
+      currentPlayerView = incumbentView;
+    } else {
+      currentPlayerView = evaluatedCandidates.find(c => c.actorId === playerActorId);
+    }
+  }
+
+  const candidatesSlice = evaluatedCandidates.slice(0, limit);
+  const plottingAdvice: string[] = [];
+  const isKpiMet = incumbentActor.powerShare >= 300;
+
+  if (playerActor) {
+    if (playerActor.level < pos.minLevel) {
+      plottingAdvice.push(`【等级提升】您的等级（${playerActor.level}）尚未达到职位门槛（${pos.minLevel}），建议优先前往酒馆或副本历练。`);
+    } else {
+      plottingAdvice.push(`【等级达标】您的等级已满足该职位的最低要求，候选评估基本资格已通过。`);
+    }
+
+    if (playerActor.powerShare < incumbentActor.powerShare) {
+      const diff = incumbentActor.powerShare - playerActor.powerShare;
+      if (loc.locationId === 'northern_bureau') {
+        plottingAdvice.push(`【缇骑削权】现任者权柄高于您（差额 ${diff}），北镇抚司是夺权机器，前往北镇抚司执行差事可以直接削弱现任者。`);
+      } else {
+        plottingAdvice.push(`【权柄争夺】您的在野权柄不足，比现任者低 ${diff} 点。建议前往对应场所执行差事，将更多权柄收归己有。`);
+      }
+    } else {
+      plottingAdvice.push(`【权柄领先】您的在野权柄（${playerActor.powerShare}）已超越或持平现任者（${incumbentActor.powerShare}），在权柄上占据绝对优势。`);
+    }
+
+    if (playerActor.faction !== loc.ownerFaction) {
+      const factionName = FACTION_LABEL[loc.ownerFaction] ?? loc.ownerFaction;
+      plottingAdvice.push(`【门路依附】您当前派系并非该地点的掌控派系「${factionName}」。可以通过依附该派系的人事/财权主管来暗中谋划。`);
+    } else {
+      plottingAdvice.push(`【同门推荐】您与该职位属于同一派系，天生具备任职亲和力，能得到吏部的优先推荐。`);
+    }
+
+    if (!isKpiMet) {
+      plottingAdvice.push(`【考功破绽】现任官员本期 KPI 考功未达标，其职位基础动摇，在每周考功结算时面临极大的弹劾被撤换风险！`);
+    } else {
+      plottingAdvice.push(`【暂难撬动】现任官员本期交税及交权指标达标，其地位稳固。若要强行替换，必须寻求天子特旨（在野权柄高于现任）。`);
+    }
+  }
+
+  const playerRankInCandidates = evaluatedCandidates.findIndex(c => c.actorId === playerActorId);
+  const currentPlayerRank = playerRankInCandidates >= 0
+    ? (playerRankInCandidates + 1)
+    : (playerActorId === incumbentActor.actorId ? 1 : undefined);
+
+  return {
+    positionId,
+    incumbent: incumbentView,
+    currentPlayer: currentPlayerView,
+    candidates: candidatesSlice,
+    plottingAdvice,
+    currentPlayerRank,
+  };
+}
+
+export async function worldServicePositionCandidatesGet(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<OfficeCandidateListView>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+
+  const positionId = typeof payload.positionId === 'string' ? payload.positionId : '';
+  if (!positionId) {
+    throw new GameError('POSITION_ID_REQUIRED', 'Position ID is required.');
+  }
+
+  let limit = typeof payload.limit === 'number' ? payload.limit : 8;
+  if (limit <= 0) limit = 8;
+  if (limit > 20) limit = 20;
+
+  const data = buildOfficeCandidateListView(ctx, positionId, limit);
+
+  return {
+    ok: true,
+    action: 'WORLD_SERVICE_POSITION_CANDIDATES_GET',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data,
   };
 }

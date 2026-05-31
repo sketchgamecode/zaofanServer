@@ -63,7 +63,7 @@
 #### EquipmentItem (物品模板)
 *   `id`: `string` - 唯一标识，格式：`eq_{slot}_{time36}_{rand16}`。
 *   `name`: `string` - 物品中文显示名称（如"陌刀"、"林教头的风雪毡帽"）。
-*   `description`: `string` - 黑色幽默风格的文案�#### MissionOffer 阶段1增量、阶段6增量及任务发布场所/发布人角色化 V1 字段
+*   `description`: `string` - 黑色幽默风格的文案�#### MissionOffer 阶段1增量、阶段6增量及任务发布场所/发布人角色化 V1 字段
 *   `powerContext?`: `MissionPowerContext` - 权力差事上下文（可选，阶段1新增）。
 *   `targetActor?`: `MissionTargetActorPreview` - 绑定的具体世界目标角色（可选，阶段6新增）。
 *   `issuerActor?`: `MissionIssuerActorPreview` - 发布任务的具体世界角色预览，其中 `actorId`, `kind`, `displayName`, `avatarId`, `level`, `faction`, `powerShare` 实时与 `world.actors` 强一致（可选，任务发布人角色化 V1 新增）。
@@ -384,3 +384,55 @@ export type WorldState = {
   - 失败时不会发生转移。
 
 *Last Updated: 2026-05-27*
+
+## 11. 2026-05-31 黄册实控关系 (派生视图)
+
+### 职务实控关系说明 (controlProfile)
+
+- **派生视图不持久化**:
+  - `controlProfile`（包括人事权 `appointmentControllerLabel`、财权 `financeControllerLabel`、俸禄链 `paylineHint`、忠诚代价 `loyaltyCostHint` 等字段）是纯派生的视图数据。
+  - 该属性完全由地点所属派系（`ownerFaction`）通过静态映射关系推导得出。
+  - 该数据**不写入玩家存档 (player_saves)**，仅随 `WORLD_LOCATIONS_GET_STATUS` 和 `WORLD_SERVICE_POSITIONS_GET_LIST` API 渲染返回。
+
+*Last Updated: 2026-05-31*
+
+## 12. 2026-05-31 职位任免与考功系统 (派生视图)
+
+### 职位KPI、控制上级及特旨强换说明 (OfficeKpiProfile / OfficeControlDetail)
+
+- **派生视图不持久化**:
+  - 职位详情中的任期与 KPI（`kpiProfile`）、控制人与拆账比（`controlDetail`）、候选任职资格诊断（`eligibility`）、以及特旨强换提示（`imperialOverrideHint`）等数据，全数由服务端通过只读规则动态派生。
+  - 该属性随接口 `WORLD_SERVICE_POSITION_GET_DETAIL` 动态生成返回，**不写入持久化存档 (player_saves)**。
+
+- **任务结算分账说明**:
+  - 任务结算中的 `officeSettlement`（包括来源、受益主官、税收分账预览、权柄扣除分账等）也属于动态分账数据，不在存档中维护真实账本。
+
+*Last Updated: 2026-05-31*
+
+## 13. 2026-06-01 职位收益账本与 Bot 离线模拟 (阶段 V1)
+
+### GameState.world.officeLedger & GameState.world.botSimulation
+
+为了使官职系统表现为有油水的资产并让冷启动世界活起来，账本数据与模拟器状态设计并作为可选字段融入 `world` 对象中：
+
+- **officeLedger**: `OfficeLedgerEntry[]`
+  - 存储了全局范围内产生的收益账本流水（限制最大 200 条，防止体积无限增长）。
+  - 分为 `mission_tax`, `mission_power`, `bot_tax`, `bot_power`, `shop_tax`, `stamina_tax` 和 `evaluation` 等条目类型。
+- **botSimulation**: `{ lastSimulatedAt: number }`
+  - 记录了上次 Bot 离线差事模拟发生的时间戳（毫秒）。
+  - 若相隔上次运行时间达到 10 分钟，将自动随机并确定性模拟 3~8 个地点的离线差事，产出账本记录，并确保在北镇抚司模拟的权柄夺取事件中，扣减 Bot 权柄并加给职位主官，在全服 10000 权柄额度中守恒。
+
+- **兼容性说明**:
+  - 该改动添加为可选字段，加载无此字段的旧存档时服务端会自动在 `ensureWorldInitialized(ctx)` 时刻初始化为空结构，不会导致类型校验失败或存档损坏。
+
+*Last Updated: 2026-06-01*
+
+## 14. 2026-06-01 吏部任免台职位候选人与诊断 (派生视图)
+
+### 职务候选人及评分诊断说明 (OfficeCandidateListView / ServicePositionCandidatesPreview)
+
+- **派生视图不持久化**:
+  - 候选人列表（`OfficeCandidateListView`）与详情预览（`ServicePositionCandidatesPreview`），包括评分（`score`）、评分细则（`scoreBreakdown`）、玩家诊断文案（`recommendation`）以及图谋建议（`plottingAdvice`）等数据，全数由服务端通过只读规则在 API 请求时动态派生。
+  - 该属性绝**不写入物理存档 (player_saves)**，均在接口 `WORLD_SERVICE_POSITION_CANDIDATES_GET` 和 `WORLD_SERVICE_POSITION_GET_DETAIL` 触发时按需动态计算并返回。
+
+*Last Updated: 2026-06-01*

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createInitialGameState } from './gameStateFactory.js';
-import { ensureWorldInitialized, worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList, syncPlayerActor, applyWorldPowerTransfer } from './world.js';
+import { ensureWorldInitialized, worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList, syncPlayerActor, applyWorldPowerTransfer, worldServicePositionGetDetail, worldServicePositionLedgerGet, worldServicePositionCandidatesGet } from './world.js';
 import type { ActionContext } from './actionContext.js';
 import type { GameState } from '../types/gameState.js';
 
@@ -54,12 +54,12 @@ describe('World Actor Pool Cold Start', () => {
     expect(factions.size).toBe(6);
   });
 
-  it('all 13 locations must have actors', () => {
+  it('all 14 locations must have actors', () => {
     const state = createInitialGameState({ now: 1 });
     ensureWorldInitialized(makeCtx(state));
 
     const locations = new Set(state.world.actors.map((a) => a.locationId));
-    expect(locations.size).toBe(13);
+    expect(locations.size).toBe(14);
     expect(locations.has('imperial_palace')).toBe(true);
     expect(locations.has('player_inventory')).toBe(true);
     expect(locations.has('wine_house')).toBe(true);
@@ -78,7 +78,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(data.totalActors).toBe(261);
     expect(data.totalPowerShare).toBe(10000);
     expect(data.byFaction).toHaveLength(6);
-    expect(data.byLocation).toHaveLength(13);
+    expect(data.byLocation).toHaveLength(14);
 
     const aggregatedPower = data.byFaction.reduce((sum: number, f: any) => sum + f.powerShare, 0);
     expect(aggregatedPower).toBe(10000);
@@ -98,7 +98,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(state.world.actors).toHaveLength(261);
   });
 
-  it('WORLD_LOCATIONS_GET_STATUS should return 13 locations with correct configurations', async () => {
+  it('WORLD_LOCATIONS_GET_STATUS should return 14 locations with correct configurations', async () => {
     const state = createInitialGameState({ now: 1 });
     const ctx = makeCtx(state);
 
@@ -106,7 +106,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(response.ok).toBe(true);
     
     const locations = response.data.locations;
-    expect(locations).toHaveLength(13);
+    expect(locations).toHaveLength(14);
 
     const palace = locations.find((l: any) => l.locationId === 'imperial_palace');
     expect(palace).toBeDefined();
@@ -240,7 +240,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(response.ok).toBe(true);
 
     const locations = response.data.locations;
-    expect(locations).toHaveLength(13);
+    expect(locations).toHaveLength(14);
     
     // Without powerFaction and suspicion, everything should be open (or locked if level is low)
     const refugee = locations.find((l: any) => l.locationId === 'refugee_camp');
@@ -375,8 +375,8 @@ describe('World Actor Pool Cold Start', () => {
     const overviewLocations = overviewData.byLocation;
     const statusLocations = locationsData.locations;
     
-    expect(statusLocations).toHaveLength(13);
-    expect(overviewLocations).toHaveLength(13);
+    expect(statusLocations).toHaveLength(14);
+    expect(overviewLocations).toHaveLength(14);
     
     for (const statusLoc of statusLocations) {
       const overviewLoc = overviewLocations.find((l: any) => l.locationId === statusLoc.locationId);
@@ -674,7 +674,7 @@ describe('WORLD_SERVICE_POSITIONS_GET_LIST', () => {
     expect(response.ok).toBe(true);
     const { positions } = (response as any).data;
     expect(Array.isArray(positions)).toBe(true);
-    // 13 locations with services across them — total positions > 10
+    // 14 locations with services across them — total positions > 10
     expect(positions.length).toBeGreaterThan(10);
   });
 
@@ -759,5 +759,412 @@ describe('WORLD_SERVICE_POSITIONS_GET_LIST', () => {
     await worldServicePositionsGetList(ctx, {});
     const total = state.world.actors.reduce((sum: number, a: any) => sum + a.powerShare, 0);
     expect(total).toBe(10000);
+  });
+
+  it('each position returns correct controlProfile in WORLD_SERVICE_POSITIONS_GET_LIST and WORLD_LOCATIONS_GET_STATUS', async () => {
+    const state = createInitialGameState({ now: 1 });
+    const ctx = makeCtx(state);
+
+    // 1. 测试 WORLD_SERVICE_POSITIONS_GET_LIST
+    const listRes = await worldServicePositionsGetList(ctx, {});
+    expect(listRes.ok).toBe(true);
+    const { positions } = listRes.data;
+    expect(positions.length).toBeGreaterThan(0);
+
+    for (const pos of positions) {
+      expect(pos.controlProfile).toBeDefined();
+      expect(typeof pos.controlProfile?.appointmentControllerLabel).toBe('string');
+      expect(typeof pos.controlProfile?.financeControllerLabel).toBe('string');
+      expect(typeof pos.controlProfile?.paylineHint).toBe('string');
+      expect(typeof pos.controlProfile?.loyaltyCostHint).toBe('string');
+    }
+
+    // 2. 测试 WORLD_LOCATIONS_GET_STATUS
+    const statusRes = await worldLocationsGetStatus(ctx, {});
+    expect(statusRes.ok).toBe(true);
+    const { locations } = statusRes.data;
+    expect(locations.length).toBeGreaterThan(0);
+
+    for (const loc of locations) {
+      for (const pos of loc.servicePositions) {
+        expect(pos.controlProfile).toBeDefined();
+        expect(typeof pos.controlProfile?.appointmentControllerLabel).toBe('string');
+        expect(typeof pos.controlProfile?.financeControllerLabel).toBe('string');
+        expect(typeof pos.controlProfile?.paylineHint).toBe('string');
+        expect(typeof pos.controlProfile?.loyaltyCostHint).toBe('string');
+      }
+    }
+  });
+
+  it('correctly maps controlProfile faction text details (抽查 imperial, border, silver, underworld)', async () => {
+    const state = createInitialGameState({ now: 1 });
+    const ctx = makeCtx(state);
+
+    const listRes = await worldServicePositionsGetList(ctx, {});
+    const { positions } = listRes.data;
+
+    // 抽查 imperial: 皇宫 (imperial_palace)
+    const imperialPos = positions.find(p => p.ownerFaction === 'imperial');
+    expect(imperialPos).toBeDefined();
+    expect(imperialPos!.controlProfile!.appointmentControllerLabel).toBe('上意与内廷批红');
+    expect(imperialPos!.controlProfile!.financeControllerLabel).toBe('内库、司礼监与赏赐账');
+    expect(imperialPos!.controlProfile!.paylineHint).toBe('银钱先入内廷账面，再按圣眷与差遣发放。');
+    expect(imperialPos!.controlProfile!.loyaltyCostHint).toBe('听旨、保密、背锅，不能质疑来路。');
+
+    // 抽查 border: 兵部/边镇 (border_command)
+    const borderPos = positions.find(p => p.ownerFaction === 'border');
+    expect(borderPos).toBeDefined();
+    expect(borderPos!.controlProfile!.appointmentControllerLabel).toBe('总兵、把总与家丁军头');
+    expect(borderPos!.controlProfile!.financeControllerLabel).toBe('军粮、军饷、赏银与边镇私账');
+    expect(borderPos!.controlProfile!.paylineHint).toBe('饷银层层下拨，克扣与拖欠都写在边账里。');
+    expect(borderPos!.controlProfile!.loyaltyCostHint).toBe('服军令、交战功、别让中枢觉得尾大不掉。');
+
+    // 抽查 silver: 盐商/织造局 (salt_merchant_guild / weaving_bureau)
+    const silverPos = positions.find(p => p.ownerFaction === 'silver');
+    expect(silverPos).toBeDefined();
+    expect(silverPos!.controlProfile!.appointmentControllerLabel).toBe('盐商首总、织造买办与牙行保人');
+    expect(silverPos!.controlProfile!.financeControllerLabel).toBe('盐引、贡品、账房银路与交易抽成');
+    expect(silverPos!.controlProfile!.paylineHint).toBe('银路由账房放款，返多少看保人和账面余银。');
+    expect(silverPos!.controlProfile!.loyaltyCostHint).toBe('纳份例、走银路、替后台遮账。');
+
+    // 抽查 underworld: 漕帮/流民营 (refugee_camp)
+    const underworldPos = positions.find(p => p.ownerFaction === 'underworld');
+    expect(underworldPos).toBeDefined();
+    expect(underworldPos!.controlProfile!.appointmentControllerLabel).toBe('香头、脚夫帮主与暗线保人');
+    expect(underworldPos!.controlProfile!.financeControllerLabel).toBe('口粮、赃货、脚钱与藏匿份子');
+    expect(underworldPos!.controlProfile!.paylineHint).toBe('底层先交粮交货，回款多少全看头目分配。');
+    expect(underworldPos!.controlProfile!.loyaltyCostHint).toBe('听招呼、守暗号、出事先扛雷。');
+  });
+
+  it('correctly returns ministry_of_personnel status and services', async () => {
+    const state = createInitialGameState({ now: 1 });
+    const ctx = makeCtx(state);
+
+    const statusRes = await worldLocationsGetStatus(ctx, {});
+    const { locations } = statusRes.data;
+    const mop = locations.find(l => l.locationId === 'ministry_of_personnel');
+
+    expect(mop).toBeDefined();
+    expect(mop!.name).toBe('吏部衙门');
+    expect(mop!.ownerFaction).toBe('censorate');
+    expect(mop!.services).toContain('office_registry');
+    expect(mop!.services).toContain('appointment');
+    expect(mop!.services).toContain('evaluation');
+  });
+});
+
+describe('WORLD_SERVICE_POSITION_GET_DETAIL', () => {
+  function makeCtx(state: any, now = 1_000_000): any {
+    let dirty = false;
+    return {
+      playerId: 'test-player',
+      now,
+      state,
+      get dirty() { return dirty; },
+      markDirty() { dirty = true; },
+    };
+  }
+
+  it('returns details of a valid service position with KPIs and control details', async () => {
+    const state = createInitialGameState({ now: 10000000 });
+    const ctx = makeCtx(state, 10000000);
+
+    const res = await worldServicePositionGetDetail(ctx, { positionId: 'ministry_of_personnel:office_registry' });
+    expect(res.ok).toBe(true);
+
+    const { position, location, kpiProfile, controlDetail, eligibility, imperialOverrideHint } = res.data;
+    expect(position.positionId).toBe('ministry_of_personnel:office_registry');
+    expect(location.locationId).toBe('ministry_of_personnel');
+    expect(location.name).toBe('吏部衙门');
+
+    // KPI Profile fields
+    expect(kpiProfile.termStartsAt).toBeLessThan(10000000);
+    expect(kpiProfile.termEndsAt).toBeGreaterThan(10000000);
+    expect(kpiProfile.taxDuePerTerm).toBeGreaterThan(0);
+    expect(kpiProfile.taxDeliveredThisTerm).toBeLessThanOrEqual(kpiProfile.taxDuePerTerm);
+    expect(kpiProfile.powerDuePerTerm).toBeGreaterThan(0);
+    expect(kpiProfile.powerDeliveredThisTerm).toBeLessThanOrEqual(kpiProfile.powerDuePerTerm);
+
+    // Control Detail fields
+    expect(controlDetail.treasurySplit.imperialPrivatePct).toBeDefined();
+    expect(controlDetail.treasurySplit.publicTreasuryPct).toBeDefined();
+    expect(controlDetail.treasurySplit.officeHolderPct).toBeDefined();
+    expect(controlDetail.treasurySplit.superiorPct).toBeDefined();
+    expect(controlDetail.treasurySplit.imperialPrivatePct + controlDetail.treasurySplit.publicTreasuryPct + controlDetail.treasurySplit.officeHolderPct + controlDetail.treasurySplit.superiorPct).toBe(100);
+
+    // Eligibility check
+    expect(eligibility.canBeConsidered).toBeDefined();
+    expect(Array.isArray(eligibility.reasons)).toBe(true);
+    expect(typeof imperialOverrideHint).toBe('string');
+  });
+
+  it('throws POSITION_NOT_FOUND when position does not exist', async () => {
+    const state = createInitialGameState({ now: 1 });
+    const ctx = makeCtx(state);
+
+    let error: any;
+    try {
+      await worldServicePositionGetDetail(ctx, { positionId: 'invalid-pos' });
+    } catch (e: any) {
+      error = e;
+    }
+    expect(error).toBeDefined();
+    expect(error.code).toBe('POSITION_NOT_FOUND');
+  });
+
+  it('throws POSITION_ID_REQUIRED when no positionId is provided', async () => {
+    const state = createInitialGameState({ now: 1 });
+    const ctx = makeCtx(state);
+
+    let error: any;
+    try {
+      await worldServicePositionGetDetail(ctx, {});
+    } catch (e: any) {
+      error = e;
+    }
+    expect(error).toBeDefined();
+    expect(error.code).toBe('POSITION_ID_REQUIRED');
+  });
+});
+
+describe('Office Ledger & Bot Simulation V1', () => {
+  it('caps officeLedger to 200 entries', () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    // Populate with 250 mock entries
+    state.world.officeLedger = [];
+    for (let i = 1; i <= 250; i++) {
+      state.world.officeLedger.push({
+        entryId: `mock_${i}`,
+        createdAt: ctx.now,
+        positionId: 'weaving_bureau:missions',
+        locationId: 'weaving_bureau',
+        service: 'missions',
+        type: 'bot_tax',
+        description: `Entry ${i}`,
+      });
+    }
+
+    const entry = {
+      entryId: `mock_new`,
+      createdAt: ctx.now,
+      positionId: 'weaving_bureau:missions',
+      locationId: 'weaving_bureau',
+      service: 'missions' as const,
+      type: 'bot_tax' as const,
+      description: `New Entry`,
+    };
+    state.world.officeLedger.push(entry);
+    if (state.world.officeLedger.length > 200) {
+      state.world.officeLedger = state.world.officeLedger.slice(-200);
+    }
+
+    expect(state.world.officeLedger).toHaveLength(200);
+    expect(state.world.officeLedger[0]!.entryId).toBe('mock_52');
+    expect(state.world.officeLedger[199]!.entryId).toBe('mock_new');
+  });
+
+  it('runs bot simulation deterministic random selection and conserves total power', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const initialPower = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+    expect(initialPower).toBe(10000);
+
+    const res = await worldLocationsGetStatus(ctx, {});
+    expect(res.ok).toBe(true);
+
+    expect(state.world.botSimulation?.lastSimulatedAt).toBe(ctx.now);
+    const ledger = state.world.officeLedger ?? [];
+    expect(ledger.length).toBeGreaterThanOrEqual(3);
+
+    const currentPower = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+    expect(currentPower).toBe(10000);
+  });
+
+  it('enforces 10-minute cooldown on bot simulation', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    await worldLocationsGetStatus(ctx, {});
+    const countAfterFirst = state.world.officeLedger?.length ?? 0;
+
+    ctx.now += 300 * 1000;
+    await worldLocationsGetStatus(ctx, {});
+    const countAfterSecond = state.world.officeLedger?.length ?? 0;
+    expect(countAfterSecond).toBe(countAfterFirst);
+
+    ctx.now += 360 * 1000;
+    await worldLocationsGetStatus(ctx, {});
+    const countAfterThird = state.world.officeLedger?.length ?? 0;
+    expect(countAfterThird).toBeGreaterThan(countAfterFirst);
+  });
+
+  it('filters ledger entries by positionId and actorId and returns ledgerPreview', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    state.world.officeLedger = [
+      {
+        entryId: 'e1',
+        createdAt: ctx.now,
+        positionId: 'weaving_bureau:missions',
+        locationId: 'weaving_bureau',
+        service: 'missions',
+        beneficiaryActorId: 'bot_1',
+        type: 'bot_tax',
+        description: 'd1',
+      },
+      {
+        entryId: 'e2',
+        createdAt: ctx.now + 1000,
+        positionId: 'northern_bureau:missions',
+        locationId: 'northern_bureau',
+        service: 'missions',
+        beneficiaryActorId: 'bot_2',
+        type: 'bot_power',
+        description: 'd2',
+      },
+    ];
+
+    const resPos = await worldServicePositionLedgerGet(ctx, { positionId: 'northern_bureau:missions' });
+    expect(resPos.ok).toBe(true);
+    expect(resPos.data.entries).toHaveLength(1);
+    expect(resPos.data.entries[0]!.entryId).toBe('e2');
+
+    const resActor = await worldServicePositionLedgerGet(ctx, { actorId: 'bot_1' });
+    expect(resActor.ok).toBe(true);
+    expect(resActor.data.entries).toHaveLength(1);
+    expect(resActor.data.entries[0]!.entryId).toBe('e1');
+
+    const resDetail = await worldServicePositionGetDetail(ctx, { positionId: 'weaving_bureau:missions' });
+    expect(resDetail.ok).toBe(true);
+    expect(resDetail.data.ledgerPreview).toHaveLength(1);
+    expect(resDetail.data.ledgerPreview[0]!.entryId).toBe('e1');
+  });
+});
+
+describe('Office Candidates and Plotting V1', () => {
+  it('throws POSITION_ID_REQUIRED and POSITION_NOT_FOUND appropriately', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    // 1. Missing positionId
+    let error1: any;
+    try {
+      await worldServicePositionCandidatesGet(ctx, {});
+    } catch (e: any) {
+      error1 = e;
+    }
+    expect(error1).toBeDefined();
+    expect(error1.code).toBe('POSITION_ID_REQUIRED');
+
+    // 2. Non-existent positionId
+    let error2: any;
+    try {
+      await worldServicePositionCandidatesGet(ctx, { positionId: 'invalid:pos' });
+    } catch (e: any) {
+      error2 = e;
+    }
+    expect(error2).toBeDefined();
+    expect(error2.code).toBe('POSITION_NOT_FOUND');
+  });
+
+  it('evaluates candidates list correctly', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    state.player.level = 10;
+    state.player.powerFaction = 'silver';
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const res = await worldServicePositionCandidatesGet(ctx, { positionId: 'weaving_bureau:missions' });
+    expect(res.ok).toBe(true);
+
+    const data = res.data;
+    expect(data.incumbent).toBeDefined();
+    expect(data.currentPlayer).toBeDefined();
+    expect(data.candidates.length).toBeGreaterThan(0);
+
+    let lastScore = 1000;
+    for (const c of data.candidates) {
+      expect(c.score).toBeLessThanOrEqual(lastScore);
+      lastScore = c.score;
+
+      const labels = c.scoreBreakdown.map(b => b.label);
+      expect(labels).toContain('等级门槛');
+      expect(labels).toContain('在野权柄');
+      expect(labels).toContain('派系匹配');
+      expect(labels).toContain('KPI机会');
+      expect(labels).toContain('职务适配');
+    }
+  });
+
+  it('generates plottingAdvice and recommendation reflecting player conditions', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    state.player.level = 1; // Insufficient level
+    state.player.powerFaction = 'silver';
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const res = await worldServicePositionCandidatesGet(ctx, { positionId: 'ministry_of_personnel:office_registry' });
+    expect(res.ok).toBe(true);
+    const data = res.data;
+
+    expect(data.currentPlayer?.recommendation).toContain('等级未达标');
+    expect(data.plottingAdvice.some(a => a.includes('等级提升'))).toBe(true);
+
+    const diff = data.incumbent.powerShare - data.currentPlayer!.powerShare;
+    if (diff > 0) {
+      expect(data.plottingAdvice.some(a => a.includes('权柄争夺'))).toBe(true);
+    }
+
+    const isKpiMet = data.incumbent.powerShare >= 300;
+    if (!isKpiMet) {
+      expect(data.plottingAdvice.some(a => a.includes('考功破绽'))).toBe(true);
+    } else {
+      expect(data.plottingAdvice.some(a => a.includes('暂难撬动'))).toBe(true);
+    }
+  });
+
+  it('integrates candidatesPreview in worldServicePositionGetDetail', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const res = await worldServicePositionGetDetail(ctx, { positionId: 'weaving_bureau:missions' });
+    expect(res.ok).toBe(true);
+    expect(res.data.candidatesPreview).toBeDefined();
+    expect(res.data.candidatesPreview!.currentPlayerRank).toBeGreaterThan(0);
+    expect(res.data.candidatesPreview!.topCandidate).toBeDefined();
+    expect(res.data.candidatesPreview!.advice.length).toBeGreaterThan(0);
+  });
+
+  it('keeps world actors and total power share completely unchanged', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const actorsBefore = JSON.stringify(state.world.actors);
+    const totalPowerBefore = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+
+    await worldServicePositionCandidatesGet(ctx, { positionId: 'weaving_bureau:missions' });
+    await worldServicePositionGetDetail(ctx, { positionId: 'weaving_bureau:missions' });
+
+    const actorsAfter = JSON.stringify(state.world.actors);
+    const totalPowerAfter = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+
+    expect(actorsAfter).toBe(actorsBefore);
+    expect(totalPowerAfter).toBe(totalPowerBefore);
   });
 });

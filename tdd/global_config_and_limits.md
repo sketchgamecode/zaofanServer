@@ -82,3 +82,28 @@
 | `dungeonPurgeTransfer` | 权力副本（蓝玉案）结算胜利时权柄转移额度 | 3 |
 
 *Last Updated: 2026-05-27*
+
+---
+
+## 8. 职位收益账本与 Bot 模拟限制 (Ledger & Simulation Limits)
+
+| 常量名 | 说明 | 数值 |
+| :--- | :--- | :--- |
+| `maxOfficeLedgerEntries` | 全局职位收益账本最大保留条目数 | 200 |
+| `botSimulationIntervalMs` | Bot 离线模拟的触发最小间隔时间（毫秒） | 600,000 ms (10分钟) |
+| `minBotSimulatedLocations` | 每次 Bot 模拟最少挑选的地点数 | 3 |
+| `maxBotSimulatedLocations` | 每次 Bot 模拟最多挑选的地点数 | 8 |
+
+*Last Updated: 2026-06-01*
+
+---
+
+## 9. 吏部任免台候选人限制 (Office Candidates Limits)
+
+| 常量名 | 说明 | 数值 |
+| :--- | :--- | :--- |
+| `defaultCandidateLimit` | 吏部任免台候选人列表查询默认返回数量 | 8 |
+| `maxCandidateLimit` | 吏部任免台候选人列表查询最大返回数量限制 | 20 |
+
+*Last Updated: 2026-06-01*
+

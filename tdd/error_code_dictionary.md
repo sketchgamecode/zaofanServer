@@ -107,5 +107,7 @@
 | `WORLD_ACTOR_NOT_FOUND` | 指定 actorId 不存在于世界角色池中，或 actorId 参数为空 | 前端提示"角色不存在或已离开世界地图" |
 | `LOCATION_NOT_FOUND` | 指定的地点不存在 | 前端提示“该地点无法找到” |
 | `LOCATION_MISSIONS_NOT_AVAILABLE` | 指定的地点不提供 missions 差事服务 | 禁用该地点的接取差事功能并 Toast 提示“该职位当前不发布差事” |
+| `POSITION_NOT_FOUND` | 职位 ID 不存在或该地点未配置该服务职位 | 弹出 Toast 提示“找不到对应的职司” |
+| `POSITION_ID_REQUIRED` | 未提供职位 ID | 前端 Log 错误，不应发送空值 |
 
-*Last Updated: 2026-05-28*
+*Last Updated: 2026-05-31*

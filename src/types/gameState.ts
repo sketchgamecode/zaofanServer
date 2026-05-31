@@ -585,6 +585,8 @@ export type MissionSettlement = {
   issuerFaction?: PowerFactionId;
   /** 任务发布人世界角色预览（任务发布人角色化 V1 新增） */
   issuerActor?: MissionIssuerActorPreview;
+  /** 任务收益分账预览（职位考功 V1 新增） */
+  officeSettlement?: OfficeSettlementPreview;
 };
 
 export type TavernState = {
@@ -694,12 +696,116 @@ export type WorldActor = {
   replacedByPlayerId?: string;
 };
 
+export type OfficeLedgerEntryType =
+  | 'mission_tax'
+  | 'mission_power'
+  | 'bot_tax'
+  | 'bot_power'
+  | 'shop_tax'
+  | 'stamina_tax'
+  | 'evaluation';
+
+export type OfficeLedgerEntry = {
+  entryId: string;
+  createdAt: number;
+  positionId: string;
+  locationId: string;
+  service: PowerLocationService;
+  beneficiaryActorId?: string;
+  beneficiaryDisplayName?: string;
+  sourceActorId?: string;
+  sourceActorDisplayName?: string;
+  targetActorId?: string;
+  targetActorDisplayName?: string;
+  type: OfficeLedgerEntryType;
+  taxValueDelta?: number;
+  powerValueDelta?: number;
+  description: string;
+};
+
 export type WorldState = {
   status: 'UNINITIALIZED' | 'ACTIVE';
   actors: WorldActor[];
+  officeLedger?: OfficeLedgerEntry[];
+  botSimulation?: {
+    lastSimulatedAt: number;
+  };
 };
 
-export type PowerLocationService = 'missions' | 'shop' | 'dungeon' | 'arena' | 'promotion' | 'intel' | 'estate' | 'stamina';
+export type PowerLocationService = 'missions' | 'shop' | 'dungeon' | 'arena' | 'promotion' | 'intel' | 'estate' | 'stamina' | 'office_registry' | 'appointment' | 'evaluation';
+
+export type OfficeKpiProfile = {
+  termStartsAt: number;
+  termEndsAt: number;
+  taxDuePerTerm: number;
+  taxDeliveredThisTerm: number;
+  powerDuePerTerm: number;
+  powerDeliveredThisTerm: number;
+};
+
+export type OfficeControlDetail = {
+  appointmentControllerActorId?: string;
+  appointmentControllerDisplayName?: string;
+  financeControllerActorId?: string;
+  financeControllerDisplayName?: string;
+  treasurySplit: {
+    imperialPrivatePct: number;
+    publicTreasuryPct: number;
+    officeHolderPct: number;
+    superiorPct: number;
+  };
+};
+
+export type OfficeEligibility = {
+  canBeConsidered: boolean;
+  reasons: string[];
+};
+
+export type OfficeSettlementPreview = {
+  sourcePositionId?: string;
+  beneficiaryActorId?: string;
+  beneficiaryDisplayName?: string;
+  taxValueDelta?: number;
+  powerValueDelta?: number;
+  routingReason: string;
+};
+
+export type OfficeCandidateScoreItem = {
+  label: string;
+  value: number;
+  passed: boolean;
+  hint: string;
+};
+
+export type OfficeCandidateView = {
+  actorId: string;
+  kind: 'player' | 'bot';
+  displayName: string;
+  avatarId: string;
+  level: number;
+  faction: PowerFactionId;
+  powerShare: number;
+  combatRating?: number;
+  isCurrentPlayer: boolean;
+  score: number;
+  scoreBreakdown: OfficeCandidateScoreItem[];
+  recommendation: string;
+};
+
+export type OfficeCandidateListView = {
+  positionId: string;
+  incumbent: OfficeCandidateView;
+  currentPlayer?: OfficeCandidateView;
+  candidates: OfficeCandidateView[];
+  plottingAdvice: string[];
+  currentPlayerRank?: number;
+};
+
+export type ServicePositionCandidatesPreview = {
+  currentPlayerRank?: number;
+  topCandidate?: OfficeCandidateView;
+  advice: string[];
+};
 
 export type PowerLocation = {
   locationId: string;
@@ -715,6 +821,13 @@ export type PowerLocation = {
 export type PowerLocationStatus = 'locked' | 'open' | 'hostile' | 'favored';
 
 export type ServicePositionStatus = 'bot_held' | 'player_held' | 'vacant' | 'locked';
+
+export type ServicePositionControlProfile = {
+  appointmentControllerLabel: string; // 谁掌人事权
+  financeControllerLabel: string;     // 谁掌财权
+  paylineHint: string;                // 俸禄链说明
+  loyaltyCostHint: string;            // 忠诚代价
+};
 
 export type ServicePositionView = {
   positionId: string;
@@ -735,6 +848,7 @@ export type ServicePositionView = {
     level: number;
     powerShare: number;
   };
+  controlProfile?: ServicePositionControlProfile;
 };
 
 export type PowerLocationView = {
@@ -808,6 +922,7 @@ export type WorldServicePositionListItem = {
   incomeHint: string;
   replaceHint: string;
   status: ServicePositionStatus;
+  controlProfile?: ServicePositionControlProfile;
 };
 
 export type GameState = {

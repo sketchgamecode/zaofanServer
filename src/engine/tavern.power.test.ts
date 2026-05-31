@@ -20,7 +20,7 @@ import { generateMissionOffers, buildActiveMissionView, getTavernInfo } from './
 import { startMission, completeMission, skipMission } from './missions.js';
 import { createInitialGameState } from './gameStateFactory.js';
 import type { GameState, PowerFactionId, MissionOffer, ActiveMission } from '../types/gameState.js';
-import { ensureWorldInitialized } from './world.js';
+import { ensureWorldInitialized, POWER_LOCATIONS, buildServicePositions, syncPlayerActor } from './world.js';
 
 // ---------------------------------------------------------------------------
 // 测试工具
@@ -785,5 +785,100 @@ describe('任务发布人角色化 V1', () => {
     expect(offers[0]!.issuerActor).toBeDefined();
     expect(offers[0]!.issuerActorId).toBeDefined();
     expect(offers[0]!.issuerActorId).not.toBe('non-existent-actor-id');
+  });
+
+  it('COMPLETE_MISSION from northern_bureau routes power to missions occupant, not the player', () => {
+    const state = makeActiveState({ powerFaction: 'imperial' });
+    const offers = generateMissionOffers(state, 1_000_000, 'northern_bureau');
+    const offer = offers[0]!;
+
+    const ctx = makeCtx(state);
+    syncPlayerActor(ctx);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+    const active = state.tavern.activeMission!;
+    active.endTime = ctx.now - 1;
+
+    active.playerCombatSnapshot.combatStats.hp = 99999;
+    active.enemySnapshot.combatStats.hp = 1;
+    active.enemySnapshot.combatStats.damageMin = 0;
+    active.enemySnapshot.combatStats.damageMax = 0;
+
+    // 记录结算前，玩家和北镇抚司 missions 主官的权柄
+    const playerActorId = `player:${ctx.playerId}`;
+    const playerActor = state.world.actors.find(a => a.actorId === playerActorId)!;
+    const playerPowerBefore = playerActor.powerShare;
+
+    const northernBureauLoc = POWER_LOCATIONS.find(l => l.locationId === 'northern_bureau')!;
+    const posList = buildServicePositions(northernBureauLoc, state.world.actors, ctx, playerActorId);
+    const missionsPos = posList.find(p => p.service === 'missions')!;
+    const occupantActor = state.world.actors.find(a => a.actorId === missionsPos.occupant.actorId)!;
+    const occupantPowerBefore = occupantActor.powerShare;
+
+    const res = completeMission(ctx, {});
+    expect(res.data.result).toBe('SUCCESS');
+
+    // 权柄应该增加到主管，而不是玩家
+    const playerPowerAfter = playerActor.powerShare;
+    const occupantPowerAfter = occupantActor.powerShare;
+    expect(playerPowerAfter).toBe(playerPowerBefore);
+    expect(occupantPowerAfter).toBeGreaterThan(occupantPowerBefore);
+
+    // 校验 officeSettlement 的内容
+    expect(res.data.officeSettlement).toBeDefined();
+    expect(res.data.officeSettlement!.sourcePositionId).toBe('northern_bureau:missions');
+    expect(res.data.officeSettlement!.beneficiaryActorId).toBe(occupantActor.actorId);
+    expect(res.data.officeSettlement!.powerValueDelta).toBeGreaterThan(0);
+    expect(res.data.officeSettlement!.taxValueDelta).toBe(0);
+
+    // 校验账本写入
+    const ledger = state.world.officeLedger ?? [];
+    expect(ledger.length).toBeGreaterThan(0);
+    const lastEntry = ledger[ledger.length - 1]!;
+    expect(lastEntry.type).toBe('mission_power');
+    expect(lastEntry.beneficiaryActorId).toBe(occupantActor.actorId);
+    expect(lastEntry.powerValueDelta).toBeGreaterThan(0);
+    expect(lastEntry.description).toContain('奉命缉拿');
+  });
+
+  it('COMPLETE_MISSION from other locations keeps power routing to player and returns officeSettlement preview with taxes', () => {
+    const state = makeActiveState({ powerFaction: 'silver' });
+    const offers = generateMissionOffers(state, 1_000_000, 'weaving_bureau');
+    const offer = offers[0]!;
+
+    const ctx = makeCtx(state);
+    syncPlayerActor(ctx);
+    startMission(ctx, { missionId: offer.missionId, offerSetId: offer.offerSetId });
+    const active = state.tavern.activeMission!;
+    active.endTime = ctx.now - 1;
+
+    active.playerCombatSnapshot.combatStats.hp = 99999;
+    active.enemySnapshot.combatStats.hp = 1;
+    active.enemySnapshot.combatStats.damageMin = 0;
+    active.enemySnapshot.combatStats.damageMax = 0;
+
+    const playerActorId = `player:${ctx.playerId}`;
+    const playerActor = state.world.actors.find(a => a.actorId === playerActorId)!;
+    const playerPowerBefore = playerActor.powerShare;
+
+    const res = completeMission(ctx, {});
+    expect(res.data.result).toBe('SUCCESS');
+
+    const playerPowerAfter = playerActor.powerShare;
+    expect(playerPowerAfter).toBeGreaterThan(playerPowerBefore);
+
+    // 校验 officeSettlement 的分账预览
+    expect(res.data.officeSettlement).toBeDefined();
+    expect(res.data.officeSettlement!.sourcePositionId).toBe('weaving_bureau:missions');
+    expect(res.data.officeSettlement!.taxValueDelta).toBeGreaterThan(0);
+    expect(res.data.officeSettlement!.powerValueDelta).toBe(0);
+
+    // 校验账本写入
+    const ledger = state.world.officeLedger ?? [];
+    expect(ledger.length).toBeGreaterThan(0);
+    const lastEntry = ledger[ledger.length - 1]!;
+    expect(lastEntry.type).toBe('mission_tax');
+    expect(lastEntry.beneficiaryActorId).toBe(res.data.officeSettlement!.beneficiaryActorId);
+    expect(lastEntry.taxValueDelta).toBeGreaterThan(0);
+    expect(lastEntry.description).toContain('完成');
   });
 });

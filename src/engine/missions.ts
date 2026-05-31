@@ -15,6 +15,7 @@ import type {
   MissionTargetActorPreview,
   WorldActor,
   MissionIssuerActorPreview,
+  OfficeSettlementPreview,
 } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
@@ -23,7 +24,7 @@ import { GameError } from './errors.js';
 import { CLASS_CONFIG } from './combatConfig.js';
 import { MathCore, buildPlayerBattleSide, getTotalAttributes, serverSimulateBattle } from './mathCore.js';
 import { buildPlayerDelta, captureResourceSnapshot, grantExp, grantResource, spendResource } from './resourceService.js';
-import { applyWorldPowerTransfer } from './world.js';
+import { applyWorldPowerTransfer, POWER_LOCATIONS, buildServicePositions, writeOfficeLedgerFromMission } from './world.js';
 import { buildTavernSummaryView, generateMissionOffers, getCurrentMountMultiplierBp, getTavernInfo, getTavernStatus, type TavernInfoData } from './tavern.js';
 
 export type StartMissionPayload = {
@@ -61,6 +62,8 @@ export type CompleteMissionData = {
   issuerFaction?: PowerFactionId;
   // 任务发布人世界角色预览（任务发布人角色化 V1 新增）
   issuerActor?: MissionIssuerActorPreview;
+  // 职位分账预览（职位考功 V1 新增）
+  officeSettlement?: OfficeSettlementPreview;
 };
 
 function emptyGrantedReward(): GrantedReward {
@@ -340,6 +343,8 @@ function buildCompleteMissionData(
     issuerFaction: settlement.issuerFaction,
     // 新增 issuerActor
     issuerActor: settlement.issuerActor,
+    // 新增 officeSettlement
+    officeSettlement: settlement.officeSettlement,
   };
 }
 
@@ -495,6 +500,7 @@ export function completeMission(
   let grantedReward = emptyGrantedReward();
   let rewardGranted = false;
   let powerResult: MissionSettlement['powerResult'];
+  let officeSettlement: MissionSettlement['officeSettlement'] = undefined;
 
   if (battleResult.playerWon) {
     grantedReward = grantRewardSnapshot(ctx.state, activeMission.rewardSnapshot);
@@ -510,17 +516,78 @@ export function completeMission(
       }
 
       const amount = powerContext.issuerFaction === powerContext.targetFaction ? 1 : 2;
+
+      let beneficiaryActorId: string | undefined = undefined;
+      let beneficiaryDisplayName: string | undefined = undefined;
+      let routingReason = '';
+
+      if (activeMission.sourceLocationId === 'northern_bureau') {
+        const northernBureauLoc = POWER_LOCATIONS.find(l => l.locationId === 'northern_bureau');
+        const posList = northernBureauLoc ? buildServicePositions(northernBureauLoc, ctx.state.world.actors, ctx, `player:${ctx.playerId}`) : [];
+        const missionsPos = posList.find(p => p.service === 'missions');
+
+        if (missionsPos?.occupant.actorId) {
+          beneficiaryActorId = missionsPos.occupant.actorId;
+          beneficiaryDisplayName = missionsPos.occupant.displayName;
+          routingReason = '锦衣卫差事权柄按人事权归公，流向该职务任职者。';
+        } else {
+          // fallback to top imperial bot
+          const imperialBots = ctx.state.world.actors.filter(a => a.faction === 'imperial' && a.kind === 'bot');
+          imperialBots.sort((a, b) => b.powerShare - a.powerShare);
+          if (imperialBots[0]) {
+            beneficiaryActorId = imperialBots[0].actorId;
+            beneficiaryDisplayName = imperialBots[0].displayName;
+            routingReason = '锦衣卫差事权柄归公，未找到该职任职者，流向皇权中枢主管太监（特旨兜底）。';
+          } else {
+            // final fallback to player
+            beneficiaryActorId = `player:${ctx.playerId}`;
+            beneficiaryDisplayName = ctx.state.player.displayName || '执行玩家';
+            routingReason = '锦衣卫差支权柄归公，无合适接收者，暂时由执行人保管（临时兜底）。';
+          }
+        }
+      }
+
       const powerTransfer = applyWorldPowerTransfer(ctx, {
         amount,
         targetFactionId: powerContext.targetFaction,
         issuerFactionId: powerContext.issuerFaction,
         targetActorId: activeMission.targetActor?.actorId,
+        beneficiaryActorId,
       });
 
       powerResult = {
         ...(suspicionResult ? suspicionResult : {}),
         powerTransfer,
       };
+
+      // Assemble officeSettlement
+      if (activeMission.sourceLocationId === 'northern_bureau') {
+        officeSettlement = {
+          sourcePositionId: 'northern_bureau:missions',
+          beneficiaryActorId,
+          beneficiaryDisplayName,
+          taxValueDelta: 0,
+          powerValueDelta: powerTransfer.actorPowerDelta,
+          routingReason,
+        };
+      } else if (activeMission.sourceLocationId) {
+        const otherLoc = POWER_LOCATIONS.find(l => l.locationId === activeMission.sourceLocationId);
+        const posList = otherLoc ? buildServicePositions(otherLoc, ctx.state.world.actors, ctx, `player:${ctx.playerId}`) : [];
+        const missionsPos = posList.find(p => p.service === 'missions');
+
+        officeSettlement = {
+          sourcePositionId: activeMission.sourcePositionId || `${activeMission.sourceLocationId}:missions`,
+          beneficiaryActorId: missionsPos?.occupant.actorId,
+          beneficiaryDisplayName: missionsPos?.occupant.displayName,
+          taxValueDelta: Math.max(10, Math.floor(activeMission.rewardSnapshot.copper * 0.15)),
+          powerValueDelta: 0,
+          routingReason: '其他衙门差事。所得税值与钱流流向该职务主官，玩家获发额定赏银。',
+        };
+      }
+
+      if (officeSettlement) {
+        writeOfficeLedgerFromMission(ctx, activeMission, officeSettlement);
+      }
     }
   }
   // 失败时不修改 suspicion（阶段1设计：失败时不加疑心）
@@ -550,6 +617,8 @@ export function completeMission(
     issuerFaction: activeMission.issuerFaction,
     // 新增 issuerActor
     issuerActor: activeMission.issuerActor,
+    // 新增 officeSettlement
+    officeSettlement,
   };
 
   activeMission.settlementStatus = 'SETTLED';

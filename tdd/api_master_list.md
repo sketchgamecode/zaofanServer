@@ -105,6 +105,13 @@
 | `BUY_AND_EQUIP_ITEM` | 购买黑市商品并立即穿戴至对应槽位 | `{"itemId": "eq_xxx"}` | `BuyAndEquipView` |
 | `BUY_ITEM` | 购买黑市商品并存入背囊 | `{"itemId": "eq_xxx"}` | `BuyItemView` |
 | `SELL_ITEM` | 出售物品（支持背囊或身上已穿戴的物品） | `{"itemId": "eq_xxx"}` | `SellItemView` |
+| `WORLD_ACTORS_GET_OVERVIEW` | 获取大明权力地图世界角色分布概览 | `{}` | `{ totalActors: number, totalPowerShare: number, byFaction: ... }` |
+| `WORLD_LOCATIONS_GET_STATUS` | 获取所有大明京城地点的解锁和任职状态 | `{}` | `PowerLocationView[]` |
+| `WORLD_ACTOR_GET_DETAIL` | 查询世界角色（玩家/Bot）的详细资料和任职情况 | `{"actorId": "actor_uuid"}` | `WorldActorDetailView` |
+| `WORLD_SERVICE_POSITIONS_GET_LIST` | 获取所有或指定条件的职位列表 | `{"locationId": "northern_bureau", "faction": "imperial"}` | `WorldServicePositionListItem[]` |
+| `WORLD_SERVICE_POSITION_GET_DETAIL` | 查询指定职位的详细属性、KPI、以及实控情况与候选预览 | `{"positionId": "weaving_bureau:missions"}` | `ServicePositionDetail` |
+| `WORLD_SERVICE_POSITION_LEDGER_GET` | 查询指定职位、角色或全局的收益账本流水 | `{"positionId": "weaving_bureau:missions", "actorId": "actor_uuid", "limit": 20}` | `{ entries: OfficeLedgerEntry[] }` |
+| `WORLD_SERVICE_POSITION_CANDIDATES_GET` | 查询指定职位的任免台候选人评分及诊断建议 | `{"positionId": "weaving_bureau:missions", "limit": 8}` | `OfficeCandidateListView` |
 | `DEBUG_RESET_SAVE` | **(仅开发)** 重置存档 | `{}` | `{ "reset": true }` |
 
 ### 4.2 废弃动作 (Deprecated — 请勿新接)
@@ -492,6 +499,14 @@ type CompleteMissionData = {
   playerDelta: PlayerDelta;
   nextMissionOffers: MissionOffer[];
   tavern: TavernSummaryView;
+  officeSettlement?: {
+    sourcePositionId?: string;
+    beneficiaryActorId?: string;
+    beneficiaryDisplayName?: string;
+    taxValueDelta?: number;
+    powerValueDelta?: number;
+    routingReason: string;
+  };
 };
 ```
 
@@ -835,6 +850,13 @@ curl -X POST http://localhost:3001/api/action/ \
         level: number;
         powerShare: number;
       };
+      // 皇册实控关系 V1
+      controlProfile?: {
+        appointmentControllerLabel: string; // 谁掌人事权
+        financeControllerLabel: string;     // 谁掌财权
+        paylineHint: string;                // 俸禄链说明
+        loyaltyCostHint: string;            // 忠诚代价
+      };
     }>;
   }>;
 }
@@ -931,8 +953,16 @@ curl -X POST http://localhost:3001/api/action/ \
     incomeHint: string;
     replaceHint: string;
     status: 'bot_held' | 'player_held' | 'vacant' | 'locked';
+    // 皇册实控关系 V1
+    controlProfile?: {
+      appointmentControllerLabel: string; // 谁掌人事权
+      financeControllerLabel: string;     // 谁掌财权
+      paylineHint: string;                // 俸禄链说明
+      loyaltyCostHint: string;            // 忠诚代价
+    };
   }>;
 }
+```
 ```
 
 **说明**:
@@ -940,4 +970,131 @@ curl -X POST http://localhost:3001/api/action/ \
 - `locationId` 与 `faction` 可单独或组合使用；不匹配时返回空数组。
 - 前端"皇宫黄册"页面可直接消费此接口，点击 CharacterPortraitCard 后调用 `WORLD_ACTOR_GET_DETAIL` 打开统一 CharacterPanel。
 
-*Last Updated: 2026-05-27*
+*Last Updated: 2026-05-31*
+
+---
+
+### WORLD_SERVICE_POSITION_GET_DETAIL
+
+按 `positionId` 查询该职位的详细信息，包括当前任期、KPI考核指标、人事与财权上级主管、分账比例拆扣、候选任职资格诊断、特旨 override 状态及最近 5 条收益账本预览。
+
+**Request Payload**:
+```typescript
+{
+  positionId: string; // 格式："locationId:service"，如 "ministry_of_personnel:office_registry"
+}
+```
+
+**Response Data**:
+```typescript
+{
+  position: ServicePositionView;
+  occupant: {
+    actorId: string;
+    kind: 'bot' | 'player';
+    displayName: string;
+    avatarId: string;
+    faction: PowerFactionId;
+    level: number;
+    powerShare: number;
+  };
+  location: {
+    locationId: string;
+    name: string;
+    ownerFaction: PowerFactionId;
+    unlockLevel: number;
+  };
+  service: PowerLocationService;
+  incomeHint: string;
+  replaceHint: string;
+  controlProfile?: ServicePositionControlProfile;
+  kpiProfile: {
+    termStartsAt: number;     // 本期考功起秒
+    termEndsAt: number;       // 本期考功止秒
+    taxDuePerTerm: number;    // 本期应交税额 (铜钱)
+    taxDeliveredThisTerm: number; // 本期已交税额
+    powerDuePerTerm: number;  // 本期应交权柄
+    powerDeliveredThisTerm: number; // 本期已交权柄
+  };
+  controlDetail: {
+    appointmentControllerActorId?: string; // 人事权主管角色 ID
+    appointmentControllerDisplayName?: string;
+    financeControllerActorId?: string;     // 财权主管角色 ID
+    financeControllerDisplayName?: string;
+    treasurySplit: { // 四方分账百分比（合为 100%）
+      imperialPrivatePct: number; // 皇帝内库
+      publicTreasuryPct: number;  // 国库税入
+      superiorPct: number;        // 上司扣留/分润
+      officeHolderPct: number;    // 任职者实得
+    };
+  };
+  eligibility: {
+    canBeConsidered: boolean; // 是否具备谋求此职候选资格
+    reasons: string[];        // 诊断意见（如：等级不足、派系不合、在野权柄不够）
+  };
+  imperialOverrideHint: string; // 皇帝特旨说明（当候选人在野权柄高于现任者时，可在吏部开启特旨强换）
+  ledgerPreview: OfficeLedgerEntry[]; // 最近 5 条该职位的账本，newest first 排序
+  candidatesPreview?: {
+    currentPlayerRank?: number; // 玩家当前排位（1-based，若为现任则为 1）
+    topCandidate?: OfficeCandidateView; // 评分第一的候选人 (挑战者)
+    advice: string[]; // 前 3 条谋缺诊断建议
+  };
+}
+```
+
+**错误码**:
+- `POSITION_NOT_FOUND`: 该职位 ID 不存在或对应的地点未配置此服务。
+- `POSITION_ID_REQUIRED`: 未提供 positionId。
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_SERVICE_POSITION_LEDGER_GET
+
+查询指定职位、指定角色、或全局的最近收益账本。
+
+**Request Payload**:
+```typescript
+{
+  positionId?: string; // 可选，按职位 ID 过滤
+  actorId?: string;    // 可选，按受益者角色 ID 过滤
+  limit?: number;      // 可选，返回最大条目数，默认 20，最大 50
+}
+```
+
+**Response Data**:
+```typescript
+{
+  entries: OfficeLedgerEntry[]; // 账本条目列表，按时间倒序排列 (newest first)
+}
+```
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_SERVICE_POSITION_CANDIDATES_GET
+
+吏部任免台：查询职位候选人列表、评分细则及谋缺诊断文案。
+
+**Request Payload**:
+```typescript
+{
+  positionId: string; // 职位 ID，如 "weaving_bureau:missions"
+  limit?: number;      // 候选人列表返回上限，默认 8，最大 20
+}
+```
+
+**Response Data**:
+```typescript
+{
+  positionId: string;
+  incumbent: OfficeCandidateView; // 现任官员评分与诊断
+  currentPlayer?: OfficeCandidateView; // 当前玩家的评分与诊断（即使落选也必定返回）
+  candidates: OfficeCandidateView[]; // 候选挑战者列表，按得分降序排序 (newest first)
+  plottingAdvice: string[]; // 面向当前玩家的 3-5 条详细图谋/谋缺中文建议
+}
+```
+
+*Last Updated: 2026-06-01*
