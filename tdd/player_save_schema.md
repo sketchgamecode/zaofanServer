@@ -416,8 +416,9 @@ export type WorldState = {
 为了使官职系统表现为有油水的资产并让冷启动世界活起来，账本数据与模拟器状态设计并作为可选字段融入 `world` 对象中：
 
 - **officeLedger**: `OfficeLedgerEntry[]`
-  - 存储了全局范围内产生的收益账本流水（限制最大 200 条，防止体积无限增长）。
+  - 存储了全局范围内产生的收益账本流水（限制最大 200 条，防止体积无限增长），其中每条流水都显式记录了所属的 `locationId`、`positionId` 以及 `service` 职能类型。
   - 分为 `mission_tax`, `mission_power`, `bot_tax`, `bot_power`, `shop_tax`, `stamina_tax` 和 `evaluation` 等条目类型。
+  - 查询接口 `WORLD_SERVICE_POSITION_LEDGER_GET` 支持通过 `locationId` 进行单个地点过滤，并支持与 `positionId` 或 `actorId` 进行 AND 多条件组合检索，以便前端展示场所近日报告。
 - **botSimulation**: `{ lastSimulatedAt: number }`
   - 记录了上次 Bot 离线差事模拟发生的时间戳（毫秒）。
   - 若相隔上次运行时间达到 10 分钟，将自动随机并确定性模拟 3~8 个地点的离线差事，产出账本记录，并确保在北镇抚司模拟的权柄夺取事件中，扣减 Bot 权柄并加给职位主官，在全服 10000 权柄额度中守恒。
@@ -436,3 +437,83 @@ export type WorldState = {
   - 该属性绝**不写入物理存档 (player_saves)**，均在接口 `WORLD_SERVICE_POSITION_CANDIDATES_GET` 和 `WORLD_SERVICE_POSITION_GET_DETAIL` 触发时按需动态计算并返回。
 
 *Last Updated: 2026-06-01*
+
+## 15. 2026-06-01 场所公账与劫掠系统 (阶段 V1)
+
+### GameState.world.locationTreasuries & GameState.world.pendingRaids
+
+为了实现以场所为核心的冲突和劫掠玩法，游戏世界状态 `world` 中新增了场所公账和劫掠事务的持久化字段：
+
+- **locationTreasuries**: `LocationTreasury[]`
+  - 存储所有支持劫掠的 active roleplay locations 的公账数据。
+  - 包含 `copperBalance` (铜钱余额)、`goodsValue` (物资价值)、`powerValue` (权势值)、`guardSlotsUsed` / `guardSlotsMax` (守卫槽数)、`defenseRating` (整体防御得分) 等核心属性。
+  - **初值与增长**: 首次启动或加载旧存档时，系统会基于地点的 `unlockLevel` 与驻留 bot 角色数初始化各地点公账初值；Bot 离线模拟与玩家差事结算会持续为公账累加收益。
+- **pendingRaids**: `Record<string, PendingRaidState>`
+  - 存储了玩家发起的劫掠战局的持久化记录。
+  - 记录属性包括 `raidId` (战局ID)、`locationId` (地点ID)、`playerWon` (是否胜出)、`settled` (是否已结算)、`defenderActorId` / `defenderDisplayName` (防守角色)、`treasurySnapshot` (劫掠前的公账余额备份)。
+  - 当玩家劫掠胜利后，可在结算 API 中对此记录进行单次结算选择；已结算或失败的战局不可重复结算。
+
+- **兼容性与总量守恒**:
+  - 新增字段在 `ensureWorldInitialized(ctx)` 阶段自动检测并进行空值防空初始化，向前完全兼容。
+  - 劫掠结算中选择“夺权”时，直接将场所扣减的权势折合为被击败防守者的权柄扣除，并累加至玩家的权柄中，完全保证了全服 `10000` 权柄的总量守恒。
+
+*Last Updated: 2026-06-01*
+
+## 16. 2026-06-01 场所守卫值守系统 (阶段 V1)
+
+### GameState.world.locationGuardDuties
+
+为了支持场所公账的守卫防御和值勤奖励机制，游戏世界状态 `world` 中新增了守卫值勤信息的持久化列表：
+
+- **locationGuardDuties**: `LocationGuardDuty[]`
+  - 存储了所有场所的值岗站岗历史与当前活跃的值岗状态。
+  - 单条值岗记录包含 `dutyId` (值守唯一ID)、`locationId` (地点ID)、`actorId` / `actorDisplayName` (值岗玩家/Bot标识与名称)、`startsAt` / `endsAt` (值岗起止时间戳)、`wageCopper` (约定应发饷银)、`status` (`'active' | 'completed' | 'abandoned'`) 等核心属性。
+  - **接入与防御**: 发起劫掠战斗时，系统会优先在列表中挑选所属场所下处于 `active` 且未到期、且 `combatRating` 最高的值守人员作为防守者，赋予其 `'场所值班守卫'` 身份与玩家进行战斗对决。
+  - **领薪与销账**: 正常完成值勤且到期的值守记录，可通过 `claim` 接口将状态修改为 `'completed'`，并按实发金额从地点公账余额中支付并给玩家增加铜钱（余额不足时短发）。主动擅自离岗则状态变为 `'abandoned'`，饷银作废。
+
+- **兼容性说明**:
+*Last Updated: 2026-06-01*
+
+## 17. 2026-06-01 全局世界状态 (Global World State V1)
+
+### GameState.world 的全局持久化迁移
+
+在 **全局世界状态 V1** 中，`GameState.world` 不再作为玩家个人私有数据持久化在 `player_saves.game_state` 字段中。
+
+- **物理存储与瘦身**：为了防止每个玩家重复保存世界状态副本而造成数据冗余，物理保存玩家存档前，程序会将 `state.world` 统一重置为轻量占位符（`{ status: 'UNINITIALIZED', actors: [] }`）。
+- **运行时合并与透传**：每次加载或访问玩家存档时，服务端会自动从物理 `world_state` 表的全局共享记录（`id = 'default_world'`）加载最新的全局世界状态并临时附加在 `GameState.world` 字段上供业务代码及前端视图读取。
+- **全局数据同步**：所有的世界修改都会保存到数据库的全局 `world_state` 记录上，多个玩家可真正跨账号相互交互，共享相同的守卫列表、账本流水、场所公账及世界权柄与人口统计。
+
+*Last Updated: 2026-06-01*
+
+## 18. 2026-06-02 主官私人公账与每周上缴 (Weekly Tribute and Private Treasury V1)
+
+### GameState.world.officeTributes
+
+为了支持场所主官的每周上缴期贡债务机制，全局世界状态 `world` 中新增了每周上缴记录的持久化列表：
+
+- **officeTributes**: `OfficeTributeTerm[]`
+  - 存储了所有主官的每周缴期（tribute term）的待上缴记录与历史状态。
+  - 单条缴贡期记录包含：
+    - `tributeId`: 唯一缴期 ID（例如 `tribute:northern_bureau:startsAt`）
+    - `positionId`: 缴贡的代表性核心职位 ID
+    - `locationId`: 缴贡场所 ID
+    - `officeHolderActorId`: 当前的主官角色 ID
+    - `superiorActorId`: 上缴的收款上级角色 ID（V1 默认 `reserved:wei_zhongxian`）
+    - `dueCopper`: 本周应缴铜钱额度（基于地点解锁等级生成）
+    - `paidCopper`: 本周已缴铜钱总额（主官可在截止前多次手动上缴）
+    - `termStartsAt` / `termEndsAt`: 本周期的起止时间戳
+    - `status`: 状态 (`'active' | 'passed' | 'failed'`)
+    - `reviewLabel`: 考评文字（如 `'本周未考' | '已足额' | '欠贡'`)
+    - `lastPaidAt?`: 最近一次缴款的时间戳
+
+### LocationTreasuryView.chiefActor 与 LocationFinanceReportView
+
+为了反映“场所暴露的钱就是主官个人的暴露资金”新口径，且提供度量场所近日流水的财务报表，扩展了场所公账相关的视图结构：
+
+- **chiefActor**: `ChiefActorView` (嵌入在 `LocationTreasuryView` 渲染返回中)
+  - 记录了当前地点主官的核心视图信息，包括 `actorId`、`displayName`、`title`、`avatarId`、`faction`、以及主官的 `personalCopperExposed` (直接映射为该场所的公账余额 `copperBalance`)。
+- **LocationFinanceReportView**: (财务报表接口的返回对象)
+  - 提供该场所最近 N 天的日聚合账本流水报表，主要字段有 `locationId`、`locationName`、`chiefActor`、`currentExposedCopper`、`nextTribute`、以及日聚合数组 `dailyRows` (记录了每日的 `peakCopper` (历史最高额)、`netCopperDelta` (日净收益)、`incomeCopper` / `expenseCopper`、`raidLossCopper` (被劫掠损耗)、`guardWageCopper` (守卫饷银支出)、`tributePaidCopper` (上缴期贡支出))。
+
+*Last Updated: 2026-06-02*

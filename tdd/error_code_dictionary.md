@@ -109,5 +109,17 @@
 | `LOCATION_MISSIONS_NOT_AVAILABLE` | 指定的地点不提供 missions 差事服务 | 禁用该地点的接取差事功能并 Toast 提示“该职位当前不发布差事” |
 | `POSITION_NOT_FOUND` | 职位 ID 不存在或该地点未配置该服务职位 | 弹出 Toast 提示“找不到对应的职司” |
 | `POSITION_ID_REQUIRED` | 未提供职位 ID | 前端 Log 错误，不应发送空值 |
+| `RAID_NOT_FOUND` | 指定的劫掠战局 ID 不存在 | 前端提示"该劫掠战局已过期或不存在" |
+| `RAID_CANNOT_SETTLE` | 劫掠记录无法结算（例如已被结算、或是失败的战局） | 前端置灰结算选项并提示"此劫掠战局无法进行结算" |
+| `LOCATION_GUARD_SLOT_FULL` | 场所守卫席位已满 (上限 3 名) | Toast 提示“值守人数已满，请换个场所值勤” |
+| `LOCATION_GUARD_ALREADY_ACTIVE` | 玩家已在此地点申请了活跃的值守任务 | Toast 提示“您已在此地值岗，请勿重复申请” |
+| `LOCATION_GUARD_NOT_FOUND` | 指定的值勤记录 ID 不存在 | 弹出 Toast 提示“找不到相应的值勤记录” |
+| `LOCATION_GUARD_NOT_OWNED` | 值守记录不属于当前玩家 | 弹出 Toast 提示“这并不是您的值勤任务” |
+| `LOCATION_GUARD_NOT_READY` | 值勤时长未结束，不可领取工钱；或者任务非 active 状态 | 禁用领取并提示“值守时辰未满” |
+| `OFFICE_TRIBUTE_NOT_FOUND` | 未找到指定的主官期贡债务记录 | Toast 提示“找不到对应的上缴账目” |
+| `OFFICE_TRIBUTE_FORBIDDEN` | 尝试替其他职司的主官代缴期贡债务 | Toast 提示“您非该职位主官，无权缴纳该项债务” |
+| `OFFICE_TRIBUTE_CLOSED` | 期贡已到期结转，缴款通道已关闭 | Toast 提示“本周缴期已截止，无法补缴” |
+| `OFFICE_TRIBUTE_INVALID_AMOUNT` | 缴贡金额小于等于零或非有效数字 | 提示“请输入合法的缴款金额” |
+| `OFFICE_TRIBUTE_INSUFFICIENT_COPPER` | 玩家身上的铜钱余额不足以完成支付 | 提示“身上铜钱不足，快去跑几趟差事吧” |
 
-*Last Updated: 2026-05-31*
+*Last Updated: 2026-06-02*

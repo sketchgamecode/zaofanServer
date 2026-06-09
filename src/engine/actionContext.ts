@@ -5,7 +5,9 @@ export type ActionContext = {
   now: number;
   state: GameState;
   dirty: boolean;
+  worldDirty?: boolean;
   markDirty: () => void;
+  markWorldDirty?: () => void;
 };
 
 export function createActionContext(input: {
@@ -13,8 +15,10 @@ export function createActionContext(input: {
   now: number;
   state: GameState;
   dirty?: boolean;
+  worldDirty?: boolean;
 }): ActionContext {
   let dirty = input.dirty ?? false;
+  let worldDirty = input.worldDirty ?? false;
 
   return {
     playerId: input.playerId,
@@ -25,6 +29,12 @@ export function createActionContext(input: {
     },
     markDirty() {
       dirty = true;
+    },
+    get worldDirty() {
+      return worldDirty;
+    },
+    markWorldDirty() {
+      worldDirty = true;
     },
   };
 }

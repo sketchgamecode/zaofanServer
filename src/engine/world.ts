@@ -1,9 +1,13 @@
 import type { ActionSuccessResponse } from '../types/action.js';
 import type { ActionContext } from './actionContext.js';
-import type { CharacterInfoView, PlayerClassId, PowerFactionId, RaceId, WorldActor, PowerLocation, PowerLocationView, PowerLocationService, PowerLocationStatus, ServicePositionView, ServicePositionStatus, PowerTransferResult, WorldActorDetailView, ActorPositionSummary, WorldServicePositionListItem, MissionTargetActorPreview, MissionCaseType, ServicePositionControlProfile, OfficeKpiProfile, OfficeControlDetail, OfficeEligibility, OfficeLedgerEntryType, OfficeLedgerEntry, GameState, OfficeCandidateScoreItem, OfficeCandidateView, OfficeCandidateListView, ServicePositionCandidatesPreview } from '../types/gameState.js';
+import type { CharacterInfoView, PlayerClassId, PowerFactionId, RaceId, WorldActor, PowerLocation, PowerLocationView, PowerLocationService, PowerLocationStatus, ServicePositionView, ServicePositionStatus, PowerTransferResult, WorldActorDetailView, ActorPositionSummary, WorldServicePositionListItem, MissionTargetActorPreview, MissionCaseType, ServicePositionControlProfile, OfficeKpiProfile, OfficeControlDetail, OfficeEligibility, OfficeLedgerEntryType, OfficeLedgerEntry, GameState, OfficeCandidateScoreItem, OfficeCandidateView, OfficeCandidateListView, ServicePositionCandidatesPreview, LocationTreasury, LocationTreasuryView, PendingRaidState, LocationRaidStartData, EnemySnapshot, BattleResultV2, LocationGuardDuty, ChiefActorView, OfficeTributeTerm, LocationFinanceReportView, LocationChiefDashboardView } from '../types/gameState.js';
 import { RACE_CONFIGS } from '../config/raceConfig.js';
 import { GameError } from './errors.js';
+import { getGameDateString } from '../lib/time.js';
 import { buildCharacterInfoView } from './character.js';
+import { CLASS_CONFIG } from './combatConfig.js';
+import { buildPlayerCombatSnapshot } from './characterCombat.js';
+import { serverSimulateBattle } from './mathCore.js';
 
 const SURNAMES = ['朱', '徐', '常', '李', '王', '张', '刘', '陈', '杨', '赵', '周', '吴', '孙', '胡', '郭', '何', '高', '林', '郑', '谢'];
 
@@ -34,6 +38,7 @@ const LOCATIONS = [
   'bun_shop',
   'pleasure_quarter',
   'ministry_of_personnel',
+  'ministry_of_rites',
 ];
 
 const LOCATION_NAMES: Record<string, string> = {
@@ -51,6 +56,7 @@ const LOCATION_NAMES: Record<string, string> = {
   bun_shop: '城门包子铺',
   pleasure_quarter: '教司坊',
   ministry_of_personnel: '吏部衙门',
+  ministry_of_rites: '礼部衙门',
 };
 
 const LOCATION_DEFAULT_OWNER: Record<string, PowerFactionId> = {
@@ -68,6 +74,7 @@ const LOCATION_DEFAULT_OWNER: Record<string, PowerFactionId> = {
   bun_shop: 'underworld',
   pleasure_quarter: 'silver',
   ministry_of_personnel: 'censorate',
+  ministry_of_rites: 'imperial',
 };
 
 export const POWER_LOCATIONS: PowerLocation[] = [
@@ -79,7 +86,7 @@ export const POWER_LOCATIONS: PowerLocation[] = [
     y: 300,
     unlockLevel: 1,
     services: ['promotion', 'intel'],
-    connectedLocationIds: ['northern_bureau', 'censorate', 'noble_mansion'],
+    connectedLocationIds: ['northern_bureau', 'censorate', 'noble_mansion', 'ministry_of_rites'],
   },
   {
     locationId: 'northern_bureau',
@@ -209,7 +216,17 @@ export const POWER_LOCATIONS: PowerLocation[] = [
     y: 250,
     unlockLevel: 10,
     services: ['office_registry', 'appointment', 'evaluation'],
-    connectedLocationIds: ['imperial_palace', 'censorate'],
+    connectedLocationIds: ['imperial_palace', 'censorate', 'ministry_of_rites'],
+  },
+  {
+    locationId: 'ministry_of_rites',
+    name: '礼部衙门',
+    ownerFaction: 'imperial',
+    x: 450,
+    y: 200,
+    unlockLevel: 10,
+    services: ['tribute_registry', 'evaluation'],
+    connectedLocationIds: ['imperial_palace', 'ministry_of_personnel'],
   },
 ];
 
@@ -227,6 +244,8 @@ const LOCATION_TRAVEL_COSTS: Record<string, number> = {
   wine_house: 5,
   bun_shop: 5,
   pleasure_quarter: 10,
+  ministry_of_personnel: 10,
+  ministry_of_rites: 10,
 };
 
 const FACTIONS = Object.keys(FACTION_TITLES) as PowerFactionId[];
@@ -252,8 +271,20 @@ export function ensureWorldInitialized(ctx: ActionContext) {
   if (!ctx.state.world.botSimulation) {
     ctx.state.world.botSimulation = { lastSimulatedAt: 0 };
   }
+  if (!ctx.state.world.locationTreasuries) {
+    ctx.state.world.locationTreasuries = [];
+  }
+  if (!ctx.state.world.pendingRaids) {
+    ctx.state.world.pendingRaids = {};
+  }
+  if (!ctx.state.world.locationGuardDuties) {
+    ctx.state.world.locationGuardDuties = [];
+  }
 
   if (ctx.state.world.status === 'ACTIVE' && ctx.state.world.actors.length > 0) {
+    if (ctx.state.world.locationTreasuries.length === 0) {
+      initializeLocationTreasuries(ctx);
+    }
     return;
   }
 
@@ -265,16 +296,62 @@ export function ensureWorldInitialized(ctx: ActionContext) {
   const TOTAL_POWER = 10000;
   let remainingPower = TOTAL_POWER;
 
-  for (let i = 0; i < ACTOR_COUNT; i++) {
+  const share = Math.floor(TOTAL_POWER / ACTOR_COUNT);
+
+  // 朱由校 (reserved:emperor_tianqi)
+  actors.push({
+    actorId: 'reserved:emperor_tianqi',
+    kind: 'bot',
+    displayName: '朱由校',
+    title: '大明天启皇帝',
+    raceId: 'RACE_01',
+    classId: 'CLASS_A',
+    faction: 'imperial',
+    locationId: 'imperial_palace',
+    level: 80,
+    powerShare: share,
+    combatSnapshot: {
+      level: 80,
+      classId: 'CLASS_A',
+      attributes: { strength: 150, intelligence: 150, agility: 150, constitution: 150, luck: 150 },
+      combatStats: { hp: 1200, armor: 300, damageMin: 50, damageMax: 100, critChanceBp: 1500 },
+      equipmentSummary: { itemPowerTotal: 200 }
+    }
+  });
+  remainingPower -= share;
+
+  // 魏忠贤 (reserved:wei_zhongxian)
+  actors.push({
+    actorId: 'reserved:wei_zhongxian',
+    kind: 'bot',
+    displayName: '魏忠贤',
+    title: '司礼监秉笔太监',
+    raceId: 'RACE_01',
+    classId: 'CLASS_C',
+    faction: 'imperial',
+    locationId: 'imperial_palace',
+    level: 75,
+    powerShare: share,
+    combatSnapshot: {
+      level: 75,
+      classId: 'CLASS_C',
+      attributes: { strength: 120, intelligence: 200, agility: 140, constitution: 130, luck: 120 },
+      combatStats: { hp: 1000, armor: 200, damageMin: 60, damageMax: 110, critChanceBp: 1200 },
+      equipmentSummary: { itemPowerTotal: 180 }
+    }
+  });
+  remainingPower -= share;
+
+  // 生成剩余 258 个 bot
+  for (let i = 0; i < ACTOR_COUNT - 2; i++) {
     const faction = FACTIONS[i % FACTIONS.length];
     const locationId = LOCATIONS[i % LOCATIONS.length];
     const surname = SURNAMES[Math.floor(rng() * SURNAMES.length)];
     const titleList = FACTION_TITLES[faction];
     const title = titleList[Math.floor(rng() * titleList.length)];
 
-    // 分配 powerShare：前 259 个尽量平分，最后一个拿剩下的
-    let powerShare = Math.floor(TOTAL_POWER / ACTOR_COUNT);
-    if (i === ACTOR_COUNT - 1) {
+    let powerShare = share;
+    if (i === ACTOR_COUNT - 3) {
       powerShare = remainingPower;
     } else {
       remainingPower -= powerShare;
@@ -306,7 +383,55 @@ export function ensureWorldInitialized(ctx: ActionContext) {
 
   ctx.state.world.actors = actors;
   ctx.state.world.status = 'ACTIVE';
-  ctx.markDirty();
+  initializeLocationTreasuries(ctx);
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+}
+
+export function initializeLocationTreasuries(ctx: ActionContext) {
+  if (!ctx.state.world.locationTreasuries) {
+    ctx.state.world.locationTreasuries = [];
+  }
+  if (!ctx.state.world.pendingRaids) {
+    ctx.state.world.pendingRaids = {};
+  }
+  if (!ctx.state.world.locationGuardDuties) {
+    ctx.state.world.locationGuardDuties = [];
+  }
+  
+  const treasuries = ctx.state.world.locationTreasuries;
+  if (treasuries.length > 0) {
+    return;
+  }
+
+  const actors = ctx.state.world.actors;
+  const roleplayLocations = POWER_LOCATIONS.filter(loc => loc.services.length > 0);
+
+  for (const loc of roleplayLocations) {
+    const locActors = actors.filter(a => a.locationId === loc.locationId);
+    const actorCount = locActors.length;
+    const avgLevel = actorCount > 0 ? (locActors.reduce((sum, a) => sum + a.level, 0) / actorCount) : 10;
+    
+    const copperBalance = loc.unlockLevel * 1000 + actorCount * 200;
+    const goodsValue = loc.unlockLevel * 500 + actorCount * 100;
+    const powerValue = loc.unlockLevel * 10 + actorCount * 2;
+    const nextDistributionAt = ctx.now + 24 * 3600 * 1000;
+    const guardSlotsMax = 3;
+    const guardSlotsUsed = 0;
+    const defenseRating = Math.floor(avgLevel * 10);
+    
+    treasuries.push({
+      locationId: loc.locationId,
+      copperBalance,
+      goodsValue,
+      powerValue,
+      nextDistributionAt,
+      guardSlotsUsed,
+      guardSlotsMax,
+      defenseRating,
+      updatedAt: ctx.now
+    });
+  }
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
 }
 
 export function aggregateWorldActors(actors: WorldActor[]) {
@@ -416,6 +541,7 @@ const POSITION_TITLE_BY_SERVICE: Record<PowerLocationService, string> = {
   office_registry: '文选名册掌籍',
   appointment: '人事任命郎中',
   evaluation: '考功主事',
+  tribute_registry: '贡纳司吏',
 };
 
 /** 定制职务标题（locationId + service → 更具风味的头衔） */
@@ -441,6 +567,8 @@ const POSITION_TITLE_CUSTOM: Partial<Record<string, string>> = {
   'ministry_of_personnel:office_registry': '吏部文选司郎中',
   'ministry_of_personnel:appointment': '内廷批红中使',
   'ministry_of_personnel:evaluation': '吏部考功司郎中',
+  'ministry_of_rites:tribute_registry': '礼部仪制司郎中',
+  'ministry_of_rites:evaluation': '礼部祠祭司郎中',
 };
 
 const INCOME_HINT_BY_SERVICE: Record<PowerLocationService, string> = {
@@ -455,6 +583,7 @@ const INCOME_HINT_BY_SERVICE: Record<PowerLocationService, string> = {
   office_registry: '此职管理天下官员名册，可获取铨选人情，收益规则待开放。',
   appointment: '此职代奏皇权特旨，主掌生死任免，收益规则待开放。',
   evaluation: '此职考评天下官员功过，课税与权柄指标，收益规则待开放。',
+  tribute_registry: '此职掌管各职司每周上缴规矩与贡纳统计，收益规则待开放。',
 };
 
 const REPLACE_HINT = '达到等级、派系关系和地点贡献要求后，后续可争夺此职。';
@@ -726,7 +855,7 @@ export function syncPlayerActor(ctx: ActionContext) {
       combatSnapshot,
     };
     ctx.state.world.actors.push(playerActor);
-    ctx.markDirty();
+    ctx.markWorldDirty?.() ?? ctx.markDirty();
   } else {
     playerActor.level = level;
     playerActor.faction = faction;
@@ -855,7 +984,7 @@ export function applyWorldPowerTransfer(
   }
 
   // Mark state dirty
-  ctx.markDirty();
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
 
   // 5. Capture faction-level power shares after transfer
   const factionPowerAfter = getFactionPowerShares();
@@ -916,6 +1045,7 @@ const SERVICE_LABEL: Record<PowerLocationService, string> = {
   office_registry: '吏籍',
   appointment: '任免',
   evaluation: '考功',
+  tribute_registry: '贡纳',
 };
 
 const FACTION_LABEL: Record<PowerFactionId, string> = {
@@ -1583,7 +1713,25 @@ export function writeOfficeLedgerFromMission(
   if (ctx.state.world.officeLedger.length > 200) {
     ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
   }
-  ctx.markDirty();
+
+  // 更新场所公账
+  if (locId) {
+    const treasuries = ctx.state.world.locationTreasuries;
+    if (treasuries) {
+      const treasury = treasuries.find(t => t.locationId === locId);
+      if (treasury) {
+        if (officeSettlement.powerValueDelta && officeSettlement.powerValueDelta > 0) {
+          treasury.powerValue += officeSettlement.powerValueDelta;
+        }
+        if (officeSettlement.taxValueDelta && officeSettlement.taxValueDelta > 0) {
+          treasury.copperBalance += officeSettlement.taxValueDelta;
+        }
+        treasury.updatedAt = ctx.now;
+      }
+    }
+  }
+
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
 }
 
 export function simulateWorldBotOfficeActivity(state: GameState, now: number): OfficeLedgerEntry[] {
@@ -1672,6 +1820,15 @@ export function simulateWorldBotOfficeActivity(state: GameState, now: number): O
               description: `${sourceActor.displayName}奉命缉拿${targetInWorld.displayName}，${pos.title}${beneficiary.displayName}得权柄 ${powerPct}%。`,
             };
             newEntries.push(entry);
+
+            const treasuries = state.world.locationTreasuries;
+            if (treasuries) {
+              const treasury = treasuries.find(t => t.locationId === loc.locationId);
+              if (treasury) {
+                treasury.powerValue += actualPower;
+                treasury.updatedAt = now;
+              }
+            }
           }
         }
       }
@@ -1729,6 +1886,19 @@ export function simulateWorldBotOfficeActivity(state: GameState, now: number): O
         description,
       };
       newEntries.push(entry);
+
+      const treasuries = state.world.locationTreasuries;
+      if (treasuries) {
+        const treasury = treasuries.find(t => t.locationId === loc.locationId);
+        if (treasury) {
+          if (type === 'shop_tax') {
+            treasury.goodsValue += taxAmount;
+          } else {
+            treasury.copperBalance += taxAmount;
+          }
+          treasury.updatedAt = now;
+        }
+      }
     }
   }
 
@@ -1755,7 +1925,7 @@ export function triggerBotSimulationIfNeeded(ctx: ActionContext) {
         ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
       }
     }
-    ctx.markDirty();
+    ctx.markWorldDirty?.() ?? ctx.markDirty();
   }
 }
 
@@ -1769,6 +1939,7 @@ export async function worldServicePositionLedgerGet(
 
   const positionId = typeof payload.positionId === 'string' ? payload.positionId : undefined;
   const actorId = typeof payload.actorId === 'string' ? payload.actorId : undefined;
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : undefined;
   let limit = typeof payload.limit === 'number' ? payload.limit : 20;
   if (limit <= 0) limit = 20;
   if (limit > 50) limit = 50;
@@ -1777,7 +1948,11 @@ export async function worldServicePositionLedgerGet(
 
   if (positionId) {
     filtered = filtered.filter(e => e.positionId === positionId);
-  } else if (actorId) {
+  }
+  if (locationId) {
+    filtered = filtered.filter(e => e.locationId === locationId);
+  }
+  if (actorId) {
     filtered = filtered.filter(e => e.beneficiaryActorId === actorId);
   }
 
@@ -2076,5 +2251,1456 @@ export async function worldServicePositionCandidatesGet(
     serverTime: ctx.now,
     stateRevision: ctx.state.meta.stateRevision,
     data,
+  };
+}
+
+function getRaidCarryMultiplier(mount: any, now: number): number {
+  if (!mount || (mount.expiresAt !== null && now >= mount.expiresAt)) {
+    return 1.0;
+  }
+  const tier = (mount.tier || '').toLowerCase();
+  const name = (mount.name || '').toLowerCase();
+  
+  if (tier.includes('donkey') || name.includes('驴')) {
+    return 1.4;
+  }
+  if (tier.includes('ox') || name.includes('牛')) {
+    return 2.0;
+  }
+  if (tier.includes('horse') || name.includes('马')) {
+    return 1.6;
+  }
+  return 1.0;
+}
+
+export function resolveChiefActor(
+  loc: PowerLocation,
+  actors: WorldActor[],
+  ctx: ActionContext,
+  playerActorId: string,
+): WorldActor | undefined {
+  if (loc.locationId === 'imperial_palace') {
+    const wei = actors.find(a => a.actorId === 'reserved:wei_zhongxian');
+    if (wei) return wei;
+  }
+
+  // Generate service positions for this location
+  const positions = buildServicePositions(loc, actors, ctx, playerActorId);
+  
+  // Priority: missions > shop > stamina
+  const priorityServices = ['missions', 'shop', 'stamina'];
+  for (const svc of priorityServices) {
+    const pos = positions.find(p => p.service === svc);
+    if (pos && pos.occupant) {
+      const actor = actors.find(a => a.actorId === pos.occupant.actorId);
+      if (actor) return actor;
+    }
+  }
+
+  // Other services in definition order
+  for (const pos of positions) {
+    if (pos.occupant) {
+      const actor = actors.find(a => a.actorId === pos.occupant.actorId);
+      if (actor) return actor;
+    }
+  }
+
+  // Fallback to highest powerShare actor of the owner faction
+  const factionActors = actors.filter(a => a.faction === loc.ownerFaction);
+  if (factionActors.length > 0) {
+    const sorted = [...factionActors].sort((a, b) => b.powerShare - a.powerShare);
+    return sorted[0];
+  }
+
+  // Final fallback: any actor in actors list
+  return actors[0];
+}
+
+export function buildLocationTreasuryView(
+  ctx: ActionContext,
+  treasury: LocationTreasury,
+  locDef: PowerLocation
+): LocationTreasuryView {
+  const locationId = treasury.locationId;
+  const locationName = locDef.name;
+  const ownerFaction = locDef.ownerFaction;
+  const ownerLabel = FACTION_LABEL[ownerFaction] ?? ownerFaction;
+
+  const totalValue = treasury.copperBalance + treasury.goodsValue;
+  let raidRiskHint = '此地防备尚可，公账财物一般，劫掠风险中等。';
+  if (totalValue >= 3000) {
+    raidRiskHint = `此地积聚了大量财货（公账约 ${totalValue}），防卫级别被动上升，极易招致各方觊觎。`;
+  } else if (totalValue < 1000) {
+    raidRiskHint = '此地目前账面较为冷清，防卫松散，油水较少。';
+  }
+
+  const mount = ctx.state.mount;
+  const mult = getRaidCarryMultiplier(mount, ctx.now);
+  let carryHint = `您当前徒步，每次劫掠只能搬运 100% 的财货。建议换乘牛车或毛驴以提升负重。`;
+  if (mult === 1.4) {
+    carryHint = `您当前骑乘毛驴，负重能力尚可，劫掠收益提升 40% (当前倍率: ${mult}x)。`;
+  } else if (mult === 1.6) {
+    carryHint = `您当前骑乘骏马，速度极快且负重可观，劫掠收益提升 60% (当前倍率: ${mult}x)。`;
+  } else if (mult === 2.0) {
+    carryHint = `您当前赶着牛车，拥有极强的财货装载能力，劫掠收益翻倍 (当前倍率: ${mult}x)！`;
+  }
+
+  const guardDuties = ctx.state.world.locationGuardDuties ?? [];
+  const activeDuties = guardDuties.filter(g => g.locationId === locationId && g.status === 'active');
+  const guards = activeDuties.map(g => {
+    const remainingSeconds = Math.max(0, Math.ceil((g.endsAt - ctx.now) / 1000));
+    const canClaimWage = ctx.now >= g.endsAt;
+    const canLeave = ctx.now < g.endsAt;
+    return {
+      ...g,
+      remainingSeconds,
+      canClaimWage,
+      canLeave,
+    };
+  });
+
+  const guardSlotsUsed = guards.length;
+  treasury.guardSlotsUsed = guardSlotsUsed;
+  const guardHint = `当前有 ${guardSlotsUsed}/${treasury.guardSlotsMax} 名守卫在此值守。若遭遇劫掠，值守守卫将首当其冲。`;
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const chief = resolveChiefActor(locDef, ctx.state.world.actors ?? [], ctx, playerActorId);
+  let chiefActorView: ChiefActorView | undefined;
+  if (chief) {
+    const avatarId = getActorAvatarId(chief, ctx);
+    let title = chief.title;
+    if (!title) {
+      const positions = buildServicePositions(locDef, ctx.state.world.actors ?? [], ctx, playerActorId);
+      const pos = positions.find(p => p.occupant?.actorId === chief.actorId);
+      if (pos) {
+        title = pos.title;
+      }
+    }
+    chiefActorView = {
+      actorId: chief.actorId,
+      displayName: chief.displayName,
+      avatarId,
+      level: chief.level,
+      faction: chief.faction,
+      title,
+      personalCopperExposed: treasury.copperBalance,
+    };
+  }
+
+  return {
+    ...treasury,
+    locationName,
+    ownerFaction,
+    ownerLabel,
+    raidRiskHint,
+    carryHint,
+    guards,
+    guardHint,
+    chiefActor: chiefActorView,
+  };
+}
+
+export async function worldLocationTreasuryGet(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<LocationTreasuryView>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : '';
+  if (!locationId) {
+    throw new GameError('LOCATION_NOT_FOUND', 'Location ID is required.');
+  }
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  if (!locDef) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  }
+
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location treasury for ${locationId} not found.`);
+  }
+
+  const view = buildLocationTreasuryView(ctx, treasury, locDef);
+
+  return {
+    ok: true,
+    action: 'WORLD_LOCATION_TREASURY_GET',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: view,
+  };
+}
+
+export function buildEnemySnapshotFromActor(
+  targetActor: WorldActor,
+  seed: string,
+  ctx: ActionContext
+): EnemySnapshot {
+  const rngSeed = (() => {
+    let hash = 0;
+    const key = seed + ':enemy';
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash << 5) - hash + key.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash);
+  })();
+  const rng = mulberry32(rngSeed);
+  
+  const hpRatioBp = 8600 + Math.floor(rng() * 800); // 8600 - 9400
+  const damageRatioBp = 8400 + Math.floor(rng() * 900); // 8400 - 9300
+  const armorRatioBp = 7000 + Math.floor(rng() * 2000); // 7000 - 9000
+
+  const level = targetActor.level;
+  const classId = targetActor.classId;
+
+  const attributes = { ...targetActor.combatSnapshot.attributes };
+  if (targetActor.kind === 'bot' && attributes.strength === 10 && attributes.intelligence === 10 && level > 1) {
+    const base = 8 + level * 2;
+    attributes.strength = base;
+    attributes.intelligence = base;
+    attributes.agility = base;
+    attributes.constitution = Math.floor(base * 0.85);
+    attributes.luck = Math.floor(base * 0.45);
+    const mainStat = CLASS_CONFIG[classId].mainStat;
+    attributes[mainStat] = Math.floor(base * 1.25);
+  }
+
+  const hpMultiplier = CLASS_CONFIG[classId]?.hpMultiplier ?? 1.5;
+  const baseHp = Math.ceil(attributes.constitution * hpMultiplier * (level + 1));
+
+  let baseArmor = targetActor.combatSnapshot.combatStats.armor;
+  if (targetActor.kind === 'bot' || baseArmor <= 10) {
+    baseArmor = Math.max(10, level * 10);
+  }
+
+  let baseDamageMin = targetActor.combatSnapshot.combatStats.damageMin;
+  let baseDamageMax = targetActor.combatSnapshot.combatStats.damageMax;
+  if (targetActor.kind === 'bot' || (baseDamageMin === 5 && baseDamageMax === 10)) {
+    baseDamageMin = Math.max(1, Math.floor(level * 2.2));
+    baseDamageMax = Math.max(baseDamageMin + 1, Math.floor(level * 3.8));
+  }
+
+  const critChanceBp = Math.floor((attributes.luck * 2.5 / Math.max(1, level)) * 100);
+  const dodgeChanceBp = CLASS_CONFIG[classId]?.dodgeChanceBp ?? undefined;
+  
+  const avatarId = getActorAvatarId(targetActor, ctx);
+
+  return {
+    enemyId: targetActor.actorId,
+    name: targetActor.displayName,
+    level,
+    classId,
+    avatarId,
+    attributes: {
+      strength: Math.max(1, Math.floor(attributes.strength * hpRatioBp / 10000)),
+      intelligence: Math.max(1, Math.floor(attributes.intelligence * hpRatioBp / 10000)),
+      agility: Math.max(1, Math.floor(attributes.agility * damageRatioBp / 10000)),
+      constitution: Math.max(1, Math.floor(attributes.constitution * hpRatioBp / 10000)),
+      luck: Math.max(1, Math.floor(attributes.luck * 9000 / 10000)),
+    },
+    combatStats: {
+      hp: Math.max(8, Math.floor(baseHp * hpRatioBp / 10000)),
+      armor: Math.max(0, Math.floor(baseArmor * armorRatioBp / 10000)),
+      damageMin: Math.max(1, Math.floor(baseDamageMin * damageRatioBp / 10000)),
+      damageMax: Math.max(2, Math.floor(baseDamageMax * damageRatioBp / 10000)),
+      critChanceBp,
+      dodgeChanceBp,
+    },
+    enemyPowerRatioBp: damageRatioBp,
+  };
+}
+
+export async function worldLocationRaidStart(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<LocationRaidStartData>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : '';
+  if (!locationId) {
+    throw new GameError('LOCATION_NOT_FOUND', 'Location ID is required.');
+  }
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  if (!locDef) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  }
+
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location treasury for ${locationId} not found.`);
+  }
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const positions = buildServicePositions(locDef, ctx.state.world.actors, ctx, playerActorId);
+  
+  // Select defender
+  let defenderActor: WorldActor | undefined;
+  let isGuardDutyDefender = false;
+
+  const guardDuties = ctx.state.world.locationGuardDuties ?? [];
+  const activeGuards = guardDuties.filter(
+    g => g.locationId === locationId && g.status === 'active' && g.endsAt > ctx.now && g.actorId !== playerActorId
+  );
+  if (activeGuards.length > 0) {
+    activeGuards.sort((a, b) => {
+      if (b.combatRating !== a.combatRating) {
+        return b.combatRating - a.combatRating;
+      }
+      if (b.level !== a.level) {
+        return b.level - a.level;
+      }
+      return a.dutyId.localeCompare(b.dutyId);
+    });
+    const chosenGuard = activeGuards[0];
+    const actor = ctx.state.world.actors.find(a => a.actorId === chosenGuard.actorId);
+    if (actor) {
+      defenderActor = actor;
+      isGuardDutyDefender = true;
+    }
+  }
+
+  if (!defenderActor) {
+    for (const pos of positions) {
+      if (pos.occupant && pos.occupant.actorId !== playerActorId) {
+        const occupantActor = ctx.state.world.actors.find(a => a.actorId === pos.occupant.actorId);
+        if (occupantActor) {
+          defenderActor = occupantActor;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!defenderActor) {
+    const locActors = ctx.state.world.actors.filter(a => a.locationId === locationId && a.actorId !== playerActorId);
+    if (locActors.length > 0) {
+      defenderActor = locActors[0];
+    }
+  }
+
+  if (!defenderActor) {
+    const factionActors = ctx.state.world.actors.filter(a => a.faction === locDef.ownerFaction && a.actorId !== playerActorId);
+    if (factionActors.length > 0) {
+      defenderActor = factionActors[0];
+    }
+  }
+
+  if (!defenderActor) {
+    const level = locDef.unlockLevel || 1;
+    const combatSnapshot = {
+      level,
+      classId: 'CLASS_A' as const,
+      attributes: { strength: 10 + level * 2, intelligence: 10 + level * 2, agility: 10 + level * 2, constitution: Math.floor((10 + level * 2) * 0.85), luck: Math.floor((10 + level * 2) * 0.45) },
+      combatStats: {
+        hp: Math.ceil(Math.floor((10 + level * 2) * 0.85) * 1.5 * (level + 1)),
+        armor: level * 10,
+        damageMin: Math.max(1, Math.floor(level * 2.2)),
+        damageMax: Math.max(2, Math.floor(level * 3.8)),
+        critChanceBp: 500,
+      },
+      equipmentSummary: { itemPowerTotal: 0 },
+    };
+    defenderActor = {
+      actorId: `fallback_guard_${locationId}`,
+      kind: 'bot',
+      displayName: `${locDef.name}守卫`,
+      raceId: 'RACE_01',
+      classId: 'CLASS_A',
+      faction: locDef.ownerFaction,
+      locationId: locationId,
+      level,
+      powerShare: 0,
+      combatSnapshot,
+    };
+  }
+
+  const raidId = `raid_${ctx.now}_${Math.floor(Math.random() * 1000000)}`;
+  const playerCombat = buildPlayerCombatSnapshot(ctx.state);
+  const enemySnapshot = buildEnemySnapshotFromActor(defenderActor, raidId, ctx);
+
+  const battleResult = serverSimulateBattle({
+    player: playerCombat,
+    enemy: enemySnapshot,
+    seed: `${raidId}:combat`,
+  });
+
+  const locationName = locDef.name;
+  const ownerFaction = locDef.ownerFaction;
+  const ownerLabel = FACTION_LABEL[ownerFaction] ?? ownerFaction;
+
+  const treasuryBefore: LocationTreasuryView = buildLocationTreasuryView(ctx, treasury, locDef);
+
+  const defenderPreview: MissionTargetActorPreview = {
+    actorId: defenderActor.actorId,
+    kind: defenderActor.kind as 'bot' | 'player',
+    displayName: defenderActor.displayName,
+    avatarId: getActorAvatarId(defenderActor, ctx),
+    level: defenderActor.level,
+    classId: defenderActor.classId,
+    faction: defenderActor.faction,
+    powerShare: defenderActor.powerShare,
+    locationId: defenderActor.locationId,
+    reason: isGuardDutyDefender ? '场所值班守卫' : '场所守卫',
+  };
+
+  if (!ctx.state.world.pendingRaids) {
+    ctx.state.world.pendingRaids = {};
+  }
+  ctx.state.world.pendingRaids[raidId] = {
+    raidId,
+    locationId,
+    playerWon: battleResult.playerWon,
+    settled: false,
+    createdAt: ctx.now,
+    defenderActorId: defenderActor.actorId,
+    defenderDisplayName: defenderActor.displayName,
+    treasurySnapshot: {
+      locationId,
+      copperBalance: treasury.copperBalance,
+      goodsValue: treasury.goodsValue,
+      powerValue: treasury.powerValue,
+    },
+  };
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+
+  // If player lost, write a raid_failed ledger entry immediately
+  if (!battleResult.playerWon) {
+    const playerDisplayName = ctx.state.player.displayName || '玩家';
+    const entry: OfficeLedgerEntry = {
+      entryId: `ledger_${ctx.now}_raid_${raidId}`,
+      createdAt: ctx.now,
+      positionId: `${locationId}:missions`,
+      locationId,
+      service: 'missions',
+      beneficiaryActorId: undefined,
+      beneficiaryDisplayName: undefined,
+      sourceActorId: playerActorId,
+      sourceActorDisplayName: playerDisplayName,
+      targetActorId: defenderActor.actorId,
+      targetActorDisplayName: defenderActor.displayName,
+      type: 'raid_failed',
+      description: `${playerDisplayName}欲强行打劫${locationName}公账，遭遇${defenderActor.displayName}全力反击，最终败退无功而返。`,
+    };
+    if (!ctx.state.world.officeLedger) {
+      ctx.state.world.officeLedger = [];
+    }
+    ctx.state.world.officeLedger.push(entry);
+    if (ctx.state.world.officeLedger.length > 200) {
+      ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+    }
+  }
+
+  return {
+    ok: true,
+    action: 'WORLD_LOCATION_RAID_START',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      raidId,
+      locationId,
+      locationName,
+      defenderActor: defenderPreview,
+      battleResult,
+      canChooseOutcome: battleResult.playerWon,
+      treasuryBefore,
+    },
+  };
+}
+
+export async function worldLocationRaidSettle(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<{
+  raidId: string;
+  locationId: string;
+  choice: 'wealth' | 'power' | 'fame';
+  rewardCopper: number;
+  rewardPower: number;
+  rewardPrestige: number;
+  treasuryAfter: LocationTreasuryView;
+}>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+
+  const raidId = typeof payload.raidId === 'string' ? payload.raidId : '';
+  const choice = typeof payload.choice === 'string' ? payload.choice : '';
+  if (!raidId) {
+    throw new GameError('RAID_NOT_FOUND', 'Raid ID is required.');
+  }
+  if (choice !== 'wealth' && choice !== 'power' && choice !== 'fame') {
+    throw new GameError('RAID_CANNOT_SETTLE', 'Invalid choice. Must be wealth, power, or fame.');
+  }
+
+  const pendingRaids = ctx.state.world.pendingRaids ?? {};
+  const pendingRaid = pendingRaids[raidId];
+  if (!pendingRaid) {
+    throw new GameError('RAID_NOT_FOUND', `Raid ${raidId} not found.`);
+  }
+  if (pendingRaid.settled) {
+    throw new GameError('RAID_CANNOT_SETTLE', `Raid ${raidId} has already been settled.`);
+  }
+  if (!pendingRaid.playerWon) {
+    throw new GameError('RAID_CANNOT_SETTLE', `Cannot settle a failed raid.`);
+  }
+
+  const locationId = pendingRaid.locationId;
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  if (!locDef) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  }
+
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location treasury for ${locationId} not found.`);
+  }
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const playerActor = ctx.state.world.actors.find(a => a.actorId === playerActorId);
+  const playerDisplayName = ctx.state.player.displayName || '玩家';
+
+  let rewardCopper = 0;
+  let rewardPower = 0;
+  let rewardPrestige = 0;
+  let ledgerType: OfficeLedgerEntryType = 'raid_wealth';
+  let taxValueDelta = 0;
+  let description = '';
+
+  if (choice === 'wealth') {
+    const deductedCopper = Math.floor(treasury.copperBalance * 0.5);
+    const deductedGoods = Math.floor(treasury.goodsValue * 0.5);
+    treasury.copperBalance -= deductedCopper;
+    treasury.goodsValue -= deductedGoods;
+
+    const mult = getRaidCarryMultiplier(ctx.state.mount, ctx.now);
+    rewardCopper = Math.floor((deductedCopper + deductedGoods) * mult);
+    ctx.state.resources.copper += rewardCopper;
+    
+    ledgerType = 'chief_exposed_copper_change';
+    taxValueDelta = -deductedCopper;
+    description = `${playerDisplayName}成功劫掠${pendingRaid.defenderDisplayName}防守的${locDef.name}公账，强行夺走财货，获得铜钱 ${rewardCopper}（含坐骑负重加成），该地主官暴露铜钱折损 ${deductedCopper}。`;
+  } else if (choice === 'power') {
+    const deductedPower = Math.floor(treasury.powerValue * 0.5);
+    treasury.powerValue -= deductedPower;
+
+    if (playerActor) {
+      const defenderActor = ctx.state.world.actors.find(a => a.actorId === pendingRaid.defenderActorId);
+      if (defenderActor) {
+        rewardPower = Math.min(deductedPower, defenderActor.powerShare);
+        defenderActor.powerShare -= rewardPower;
+        playerActor.powerShare += rewardPower;
+      } else {
+        const factionBots = ctx.state.world.actors.filter(a => a.kind === 'bot' && a.faction === locDef.ownerFaction && a.powerShare > deductedPower);
+        if (factionBots.length > 0) {
+          factionBots[0].powerShare -= deductedPower;
+          playerActor.powerShare += deductedPower;
+          rewardPower = deductedPower;
+        }
+      }
+    }
+
+    ledgerType = 'raid_power';
+    const powerPct = (rewardPower / 100).toFixed(2);
+    description = `${playerDisplayName}成功劫掠${pendingRaid.defenderDisplayName}防守的${locDef.name}公账，强行夺走权势，玩家在野权柄提升 ${powerPct}%。`;
+  } else {
+    // choice === 'fame'
+    const deductedGoods = Math.floor(treasury.goodsValue * 0.3);
+    treasury.goodsValue -= deductedGoods;
+
+    rewardPrestige = locDef.unlockLevel * 5 + Math.floor(deductedGoods / 10) + 5;
+    ctx.state.resources.prestige = (ctx.state.resources.prestige ?? 0) + rewardPrestige;
+
+    ledgerType = 'raid_fame';
+    description = `${playerDisplayName}成功劫掠${locDef.name}公账，不取财物，唯将缴获物资散发给城中贫苦流民，声望大涨，获得声望 ${rewardPrestige} 点。`;
+  }
+
+  // Mark as settled
+  pendingRaid.settled = true;
+  treasury.updatedAt = ctx.now;
+
+  // Write to officeLedger
+  const entry: OfficeLedgerEntry = {
+    entryId: `ledger_${ctx.now}_raid_${raidId}`,
+    createdAt: ctx.now,
+    positionId: `${locationId}:missions`,
+    locationId,
+    service: 'missions',
+    beneficiaryActorId: playerActorId,
+    beneficiaryDisplayName: playerDisplayName,
+    sourceActorId: playerActorId,
+    sourceActorDisplayName: playerDisplayName,
+    targetActorId: pendingRaid.defenderActorId,
+    targetActorDisplayName: pendingRaid.defenderDisplayName,
+    type: ledgerType,
+    taxValueDelta,
+    powerValueDelta: rewardPower,
+    description,
+  };
+
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+  ctx.state.world.officeLedger.push(entry);
+  if (ctx.state.world.officeLedger.length > 200) {
+    ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+  }
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+
+  const locationName = locDef.name;
+  const ownerFaction = locDef.ownerFaction;
+  const ownerLabel = FACTION_LABEL[ownerFaction] ?? ownerFaction;
+
+  const treasuryAfter: LocationTreasuryView = buildLocationTreasuryView(ctx, treasury, locDef);
+
+  return {
+    ok: true,
+    action: 'WORLD_LOCATION_RAID_SETTLE',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      raidId,
+      locationId,
+      choice,
+      rewardCopper,
+      rewardPower,
+      rewardPrestige,
+      treasuryAfter,
+    },
+  };
+}
+
+export async function worldLocationGuardJoin(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<LocationTreasuryView>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : '';
+  if (!locationId) {
+    throw new GameError('LOCATION_NOT_FOUND', 'Location ID is required.');
+  }
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  if (!locDef) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  }
+
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location treasury for ${locationId} not found.`);
+  }
+
+  const guardDuties = ctx.state.world.locationGuardDuties ?? [];
+  const activeDuties = guardDuties.filter(g => g.locationId === locationId && g.status === 'active');
+
+  if (activeDuties.length >= treasury.guardSlotsMax) {
+    throw new GameError('LOCATION_GUARD_SLOT_FULL', `Location guard slots are full.`);
+  }
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const hasActiveDuty = activeDuties.some(g => g.actorId === playerActorId);
+  if (hasActiveDuty) {
+    throw new GameError('LOCATION_GUARD_ALREADY_ACTIVE', `You are already guarding this location.`);
+  }
+
+  let durationMinutes = 60;
+  const durVal = typeof payload.durationMinutes === 'number' ? payload.durationMinutes : 60;
+  if (durVal <= 30) {
+    durationMinutes = 30;
+  } else if (durVal >= 120) {
+    durationMinutes = 120;
+  } else {
+    durationMinutes = 60;
+  }
+
+  let baseWage = 45;
+  if (durationMinutes === 30) baseWage = 20;
+  else if (durationMinutes === 120) baseWage = 100;
+
+  const bonus = Math.floor(treasury.defenseRating * 0.1);
+  const wageCopper = baseWage + bonus;
+
+  const playerActor = ctx.state.world.actors.find(a => a.actorId === playerActorId);
+  if (!playerActor) {
+    throw new GameError('WORLD_PLAYER_ACTOR_NOT_FOUND', 'Player actor not found in world.');
+  }
+
+  const itemPowerTotal = playerActor.combatSnapshot?.equipmentSummary?.itemPowerTotal ?? 0;
+  const combatRating = itemPowerTotal + playerActor.level * 10;
+  const avatarId = getActorAvatarId(playerActor, ctx);
+
+  const dutyId = `duty_${ctx.now}_${Math.floor(Math.random() * 1000000)}`;
+  const startsAt = ctx.now;
+  const endsAt = ctx.now + durationMinutes * 60 * 1000;
+
+  const newDuty: LocationGuardDuty = {
+    dutyId,
+    locationId,
+    actorId: playerActorId,
+    actorDisplayName: playerActor.displayName,
+    actorAvatarId: avatarId,
+    actorKind: 'player',
+    faction: playerActor.faction,
+    level: playerActor.level,
+    combatRating,
+    startsAt,
+    endsAt,
+    wageCopper,
+    status: 'active',
+  };
+
+  if (!ctx.state.world.locationGuardDuties) {
+    ctx.state.world.locationGuardDuties = [];
+  }
+  ctx.state.world.locationGuardDuties.push(newDuty);
+
+  // Write to ledger
+  const playerDisplayName = ctx.state.player.displayName || '玩家';
+  const entry: OfficeLedgerEntry = {
+    entryId: `ledger_${ctx.now}_guard_join_${dutyId}`,
+    createdAt: ctx.now,
+    positionId: `${locationId}:missions`,
+    locationId,
+    service: 'missions',
+    beneficiaryActorId: playerActorId,
+    beneficiaryDisplayName: playerDisplayName,
+    sourceActorId: playerActorId,
+    sourceActorDisplayName: playerDisplayName,
+    type: 'guard_join',
+    description: `${playerDisplayName}在${locDef.name}应下值守，约定值守${durationMinutes}分钟，饷银 ${wageCopper} 铜钱。`,
+  };
+
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+  ctx.state.world.officeLedger.push(entry);
+  if (ctx.state.world.officeLedger.length > 200) {
+    ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+  }
+
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+
+  const updatedViewRes = await worldLocationTreasuryGet(ctx, { locationId });
+  return updatedViewRes;
+}
+
+export async function worldLocationGuardLeave(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<LocationTreasuryView>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+
+  const dutyId = typeof payload.dutyId === 'string' ? payload.dutyId : '';
+  if (!dutyId) {
+    throw new GameError('LOCATION_GUARD_NOT_FOUND', 'Duty ID is required.');
+  }
+
+  const guardDuties = ctx.state.world.locationGuardDuties ?? [];
+  const duty = guardDuties.find(g => g.dutyId === dutyId);
+  if (!duty) {
+    throw new GameError('LOCATION_GUARD_NOT_FOUND', `Guard duty ${dutyId} not found.`);
+  }
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  if (duty.actorId !== playerActorId) {
+    throw new GameError('LOCATION_GUARD_NOT_OWNED', 'This guard duty does not belong to you.');
+  }
+
+  if (duty.status !== 'active') {
+    throw new GameError('LOCATION_GUARD_NOT_READY', 'Cannot leave a duty that is not active.');
+  }
+
+  duty.status = 'abandoned';
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === duty.locationId);
+  const locationName = locDef?.name ?? duty.locationId;
+  const playerDisplayName = ctx.state.player.displayName || '玩家';
+
+  const entry: OfficeLedgerEntry = {
+    entryId: `ledger_${ctx.now}_guard_leave_${dutyId}`,
+    createdAt: ctx.now,
+    positionId: `${duty.locationId}:missions`,
+    locationId: duty.locationId,
+    service: 'missions',
+    sourceActorId: playerActorId,
+    sourceActorDisplayName: playerDisplayName,
+    type: 'guard_leave',
+    description: `${playerDisplayName}在${locationName}值守未满时辰便擅自离岗，饷银作废。`,
+  };
+
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+  ctx.state.world.officeLedger.push(entry);
+  if (ctx.state.world.officeLedger.length > 200) {
+    ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+  }
+
+  const updatedViewRes = await worldLocationTreasuryGet(ctx, { locationId: duty.locationId });
+  return updatedViewRes;
+}
+
+export async function worldLocationGuardClaim(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<{
+  dutyId: string;
+  locationId: string;
+  wageExpected: number;
+  wagePaid: number;
+  shortfall: number;
+  treasuryAfter: LocationTreasuryView;
+}>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+
+  const dutyId = typeof payload.dutyId === 'string' ? payload.dutyId : '';
+  if (!dutyId) {
+    throw new GameError('LOCATION_GUARD_NOT_FOUND', 'Duty ID is required.');
+  }
+
+  const guardDuties = ctx.state.world.locationGuardDuties ?? [];
+  const duty = guardDuties.find(g => g.dutyId === dutyId);
+  if (!duty) {
+    throw new GameError('LOCATION_GUARD_NOT_FOUND', `Guard duty ${dutyId} not found.`);
+  }
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  if (duty.actorId !== playerActorId) {
+    throw new GameError('LOCATION_GUARD_NOT_OWNED', 'This guard duty does not belong to you.');
+  }
+
+  if (duty.status !== 'active') {
+    throw new GameError('LOCATION_GUARD_NOT_READY', 'This guard duty has already been settled or abandoned.');
+  }
+
+  if (ctx.now < duty.endsAt) {
+    throw new GameError('LOCATION_GUARD_NOT_READY', 'Guard duty shift has not ended yet.');
+  }
+
+  const locationId = duty.locationId;
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location treasury for ${locationId} not found.`);
+  }
+
+  const wageExpected = duty.wageCopper;
+  const wagePaid = Math.max(0, Math.min(wageExpected, treasury.copperBalance));
+  const shortfall = wageExpected - wagePaid;
+
+  treasury.copperBalance -= wagePaid;
+  ctx.state.resources.copper += wagePaid;
+  duty.status = 'completed';
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  const locationName = locDef?.name ?? locationId;
+  const playerDisplayName = ctx.state.player.displayName || '玩家';
+
+  let description = '';
+  let ledgerType: OfficeLedgerEntryType = 'guard_wage';
+  if (shortfall === 0) {
+    description = `${playerDisplayName}在${locationName}守满时辰，领得值守饷银 ${wagePaid} 铜钱。`;
+  } else {
+    ledgerType = 'guard_wage_shortfall';
+    description = `${locationName}公账告罄，${playerDisplayName}守满时辰仅得饷银 ${wagePaid} 铜钱，短发 ${shortfall} 铜钱。`;
+  }
+
+  const entry: OfficeLedgerEntry = {
+    entryId: `ledger_${ctx.now}_guard_claim_${dutyId}`,
+    createdAt: ctx.now,
+    positionId: `${locationId}:missions`,
+    locationId,
+    service: 'missions',
+    beneficiaryActorId: playerActorId,
+    beneficiaryDisplayName: playerDisplayName,
+    sourceActorId: playerActorId,
+    sourceActorDisplayName: playerDisplayName,
+    type: ledgerType,
+    taxValueDelta: -wagePaid,
+    description,
+  };
+
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+  ctx.state.world.officeLedger.push(entry);
+  if (ctx.state.world.officeLedger.length > 200) {
+    ctx.state.world.officeLedger = ctx.state.world.officeLedger.slice(-200);
+  }
+
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+
+  const treasuryAfterRes = await worldLocationTreasuryGet(ctx, { locationId });
+  const treasuryAfter = treasuryAfterRes.data;
+
+  return {
+    ok: true,
+    action: 'WORLD_LOCATION_GUARD_CLAIM',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      dutyId,
+      locationId,
+      wageExpected,
+      wagePaid,
+      shortfall,
+      treasuryAfter,
+    },
+  };
+}
+
+export function getWeekRange(nowMs: number): { startsAt: number; endsAt: number } {
+  const d = new Date(nowMs);
+  const day = d.getDay(); // 0: Sunday, 1: Monday, ... 6: Saturday
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  
+  return {
+    startsAt: monday.getTime(),
+    endsAt: sunday.getTime(),
+  };
+}
+
+export function updateOfficeTributes(ctx: ActionContext) {
+  if (!ctx.state.world) return;
+  if (!ctx.state.world.officeTributes) {
+    ctx.state.world.officeTributes = [];
+  }
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+
+  const tributes = ctx.state.world.officeTributes;
+  const now = ctx.now;
+  let dirty = false;
+
+  // 1. Process expired active terms
+  for (const term of tributes) {
+    if (term.status === 'active' && now > term.termEndsAt) {
+      dirty = true;
+      if (term.paidCopper >= term.dueCopper) {
+        term.status = 'passed';
+        term.reviewLabel = '已足额';
+        
+        // Write to ledger
+        const entry: OfficeLedgerEntry = {
+          entryId: `ledger_tribute_passed_${term.tributeId}`,
+          createdAt: now,
+          positionId: term.positionId,
+          locationId: term.locationId,
+          service: 'evaluation',
+          type: 'tribute_passed',
+          description: `本期缴贡已截止，主官 ${term.officeHolderActorId} 足额缴纳 ${term.paidCopper}/${term.dueCopper}，考核评定为【已足额】。`,
+        };
+        ctx.state.world.officeLedger.push(entry);
+      } else {
+        term.status = 'failed';
+        term.reviewLabel = '欠贡';
+        
+        // Write to ledger
+        const entry: OfficeLedgerEntry = {
+          entryId: `ledger_tribute_failed_${term.tributeId}`,
+          createdAt: now,
+          positionId: term.positionId,
+          locationId: term.locationId,
+          service: 'evaluation',
+          type: 'tribute_failed',
+          description: `本期缴贡已截止，主官 ${term.officeHolderActorId} 欠缴，实际仅缴纳 ${term.paidCopper}/${term.dueCopper}，考核评定为【欠贡】。`,
+        };
+        ctx.state.world.officeLedger.push(entry);
+      }
+    }
+  }
+
+  // 2. Generate active terms for this week
+  const { startsAt, endsAt } = getWeekRange(now);
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+
+  for (const loc of POWER_LOCATIONS) {
+    if (loc.locationId === 'imperial_palace' || loc.locationId === 'player_inventory') {
+      continue;
+    }
+
+    const hasActiveTerm = tributes.some(t => 
+      t.locationId === loc.locationId && 
+      t.status === 'active' && 
+      t.termStartsAt >= startsAt && 
+      t.termStartsAt <= endsAt
+    );
+
+    if (!hasActiveTerm) {
+      // Find the chief actor for this location
+      const chief = resolveChiefActor(loc, ctx.state.world.actors ?? [], ctx, playerActorId);
+      if (!chief) continue;
+
+      // Find primary positionId for this location: missions > shop > stamina > first position
+      const positions = buildServicePositions(loc, ctx.state.world.actors ?? [], ctx, playerActorId);
+      let positionId = `${loc.locationId}:missions`;
+      const primarySvc = ['missions', 'shop', 'stamina'].find(svc => positions.some(p => p.service === svc));
+      if (primarySvc) {
+        positionId = `${loc.locationId}:${primarySvc}`;
+      } else if (positions.length > 0) {
+        positionId = positions[0].positionId;
+      }
+
+      const dueCopper = 1000 + loc.unlockLevel * 100;
+      const tributeId = `tribute:${loc.locationId}:${startsAt}`;
+
+      tributes.push({
+        tributeId,
+        positionId,
+        locationId: loc.locationId,
+        officeHolderActorId: chief.actorId,
+        superiorActorId: 'reserved:wei_zhongxian',
+        dueCopper,
+        paidCopper: 0,
+        termStartsAt: startsAt,
+        termEndsAt: endsAt,
+        status: 'active',
+        reviewLabel: '本周未考',
+      });
+      dirty = true;
+    }
+  }
+
+  if (dirty) {
+    ctx.markWorldDirty?.() ?? ctx.markDirty();
+  }
+}
+
+export async function worldOfficeTributeGet(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<{ terms: OfficeTributeTerm[] }>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+  updateOfficeTributes(ctx);
+
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : undefined;
+  const positionId = typeof payload.positionId === 'string' ? payload.positionId : undefined;
+  const actorId = typeof payload.actorId === 'string' ? payload.actorId : undefined;
+  const includeHistory = !!payload.includeHistory;
+
+  let terms = ctx.state.world.officeTributes ?? [];
+
+  if (!includeHistory) {
+    terms = terms.filter(t => t.status === 'active');
+  }
+
+  if (locationId) {
+    terms = terms.filter(t => t.locationId === locationId);
+  }
+  if (positionId) {
+    terms = terms.filter(t => t.positionId === positionId);
+  }
+  if (actorId) {
+    terms = terms.filter(t => t.officeHolderActorId === actorId);
+  }
+
+  return {
+    ok: true,
+    action: 'WORLD_OFFICE_TRIBUTE_GET',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      terms,
+    },
+  };
+}
+
+export async function worldOfficeTributePay(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<{ term: OfficeTributeTerm; copperBefore: number; copperAfter: number }>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+  updateOfficeTributes(ctx);
+
+  const tributeId = typeof payload.tributeId === 'string' ? payload.tributeId : '';
+  const amount = Number(payload.amountCopper);
+
+  if (!tributeId) {
+    throw new GameError('OFFICE_TRIBUTE_NOT_FOUND', 'Tribute ID is required.');
+  }
+  if (isNaN(amount) || amount <= 0) {
+    throw new GameError('OFFICE_TRIBUTE_INVALID_AMOUNT', 'Tribute payment amount must be greater than 0.');
+  }
+
+  const tributes = ctx.state.world.officeTributes ?? [];
+  const term = tributes.find(t => t.tributeId === tributeId);
+  if (!term) {
+    throw new GameError('OFFICE_TRIBUTE_NOT_FOUND', `Tribute term ${tributeId} not found.`);
+  }
+
+  if (term.status !== 'active') {
+    throw new GameError('OFFICE_TRIBUTE_CLOSED', 'This tribute term is closed and cannot be paid.');
+  }
+
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  if (term.officeHolderActorId !== playerActorId) {
+    throw new GameError('OFFICE_TRIBUTE_FORBIDDEN', 'You cannot pay tribute for another officer.');
+  }
+
+  const currentCopper = ctx.state.resources.copper ?? 0;
+  if (currentCopper < amount) {
+    throw new GameError('OFFICE_TRIBUTE_INSUFFICIENT_COPPER', 'You do not have enough copper.');
+  }
+
+  // Deduct player copper
+  ctx.state.resources.copper = currentCopper - amount;
+  term.paidCopper += amount;
+  term.lastPaidAt = ctx.now;
+
+  // Add to superior's location treasury (imperial_palace)
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const palaceTreasury = treasuries.find(t => t.locationId === 'imperial_palace');
+  if (palaceTreasury) {
+    palaceTreasury.copperBalance += amount;
+  }
+
+  // Double ledger entry logging
+  const payerEntry: OfficeLedgerEntry = {
+    entryId: `ledger_tribute_pay_payer_${term.tributeId}_${ctx.now}`,
+    createdAt: ctx.now,
+    positionId: term.positionId,
+    locationId: term.locationId,
+    service: 'tribute_registry',
+    sourceActorId: playerActorId,
+    sourceActorDisplayName: ctx.state.player.displayName,
+    targetActorId: term.superiorActorId,
+    targetActorDisplayName: '魏忠贤',
+    type: 'tribute_pay',
+    taxValueDelta: -amount,
+    description: `${ctx.state.player.displayName}本周向司礼监缴纳铜钱 ${amount}。`,
+  };
+  
+  if (!ctx.state.world.officeLedger) {
+    ctx.state.world.officeLedger = [];
+  }
+  const ledger = ctx.state.world.officeLedger;
+  ledger.push(payerEntry);
+
+  const receiverEntry: OfficeLedgerEntry = {
+    entryId: `ledger_tribute_pay_receiver_${term.tributeId}_${ctx.now}`,
+    createdAt: ctx.now,
+    positionId: 'imperial_palace:promotion',
+    locationId: 'imperial_palace',
+    service: 'promotion',
+    sourceActorId: playerActorId,
+    sourceActorDisplayName: ctx.state.player.displayName,
+    targetActorId: term.superiorActorId,
+    targetActorDisplayName: '魏忠贤',
+    type: 'tribute_pay',
+    taxValueDelta: amount,
+    description: `${ctx.state.player.displayName}本周向司礼监缴纳铜钱 ${amount}。`,
+  };
+  ledger.push(receiverEntry);
+
+  if (ledger.length > 200) {
+    ctx.state.world.officeLedger = ledger.slice(-200);
+  }
+
+  ctx.markWorldDirty?.() ?? ctx.markDirty();
+
+  return {
+    ok: true,
+    action: 'WORLD_OFFICE_TRIBUTE_PAY',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: {
+      term,
+      copperBefore: currentCopper,
+      copperAfter: ctx.state.resources.copper,
+    },
+  };
+}
+
+export async function worldLocationFinanceReportGet(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<LocationFinanceReportView>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+  updateOfficeTributes(ctx);
+
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : '';
+  if (!locationId) {
+    throw new GameError('LOCATION_NOT_FOUND', 'Location ID is required.');
+  }
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  if (!locDef) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  }
+
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location treasury for ${locationId} not found.`);
+  }
+
+  const daysCount = typeof payload.days === 'number' ? Math.min(30, Math.max(1, payload.days)) : 7;
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+
+  // Resolve chief actor
+  const chief = resolveChiefActor(locDef, ctx.state.world.actors ?? [], ctx, playerActorId);
+  const chiefView = chief ? {
+    actorId: chief.actorId,
+    displayName: chief.displayName,
+    title: chief.title || (buildServicePositions(locDef, ctx.state.world.actors ?? [], ctx, playerActorId).find(p => p.occupant?.actorId === chief.actorId)?.title),
+    avatarId: getActorAvatarId(chief, ctx),
+  } : {
+    actorId: 'unknown',
+    displayName: '无',
+    avatarId: 'avatar_default',
+  };
+
+  const tributes = ctx.state.world.officeTributes ?? [];
+  const nextTribute = tributes.find(t => t.locationId === locationId && t.status === 'active');
+
+  // Build daily rows using reverse balance calculations
+  const daysList: string[] = [];
+  for (let i = 0; i < daysCount; i++) {
+    const ms = ctx.now - i * 24 * 60 * 60 * 1000;
+    daysList.push(getGameDateString(ms));
+  }
+
+  const officeLedger = ctx.state.world.officeLedger ?? [];
+  const sortedEntries = officeLedger
+    .filter(e => e.locationId === locationId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  let runningBalance = treasury.copperBalance;
+  const dailyRowsList = daysList.map(dk => {
+    return {
+      dayKey: dk,
+      peakCopper: 0,
+      netCopperDelta: 0,
+      incomeCopper: 0,
+      expenseCopper: 0,
+      raidLossCopper: 0,
+      guardWageCopper: 0,
+      tributePaidCopper: 0,
+      hasEntries: false,
+    };
+  });
+
+  for (const row of dailyRowsList) {
+    const dayEntries = sortedEntries.filter(e => getGameDateString(e.createdAt) === row.dayKey);
+    if (dayEntries.length > 0) {
+      row.hasEntries = true;
+      row.peakCopper = runningBalance;
+      for (const entry of dayEntries) {
+        const delta = entry.taxValueDelta || 0;
+        row.netCopperDelta += delta;
+        if (delta > 0) {
+          row.incomeCopper += delta;
+        } else if (delta < 0) {
+          const absDelta = Math.abs(delta);
+          row.expenseCopper += absDelta;
+          if (entry.type === 'chief_exposed_copper_change' || entry.type === 'raid_wealth') {
+            row.raidLossCopper += absDelta;
+          } else if (entry.type === 'guard_wage' || entry.type === 'guard_wage_shortfall') {
+            row.guardWageCopper += absDelta;
+          } else if (entry.type === 'tribute_pay') {
+            row.tributePaidCopper += absDelta;
+          }
+        }
+        runningBalance -= delta;
+        row.peakCopper = Math.max(row.peakCopper, runningBalance);
+      }
+    } else {
+      row.peakCopper = runningBalance;
+    }
+  }
+
+  const report: LocationFinanceReportView = {
+    locationId,
+    locationName: locDef.name,
+    chiefActor: chiefView,
+    currentExposedCopper: treasury.copperBalance,
+    nextTribute,
+    dailyRows: dailyRowsList.map(({ hasEntries, ...rest }) => rest),
+  };
+
+  return {
+    ok: true,
+    action: 'WORLD_LOCATION_FINANCE_REPORT_GET',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: report,
+  };
+}
+
+/**
+ * WORLD_LOCATION_CHIEF_DASHBOARD_GET
+ * 聚合场所主官管事面板所需全部数据：主官信息、公账、进贡期、核心职位、近日账本流水及财务摘要。
+ * 此接口为只读接口，前端无需再并发请求多个接口来组合面板数据。
+ */
+export async function worldLocationChiefDashboardGet(
+  ctx: ActionContext,
+  payload: Record<string, unknown>,
+): Promise<ActionSuccessResponse<LocationChiefDashboardView>> {
+  ensureWorldInitialized(ctx);
+  syncPlayerActor(ctx);
+  triggerBotSimulationIfNeeded(ctx);
+  updateOfficeTributes(ctx);
+
+  // ── 1. 解析 locationId ──────────────────────────────────────────────────
+  const locationId = typeof payload.locationId === 'string' ? payload.locationId : '';
+  if (!locationId) {
+    throw new GameError('LOCATION_NOT_FOUND', 'Location ID is required.');
+  }
+
+  const locDef = POWER_LOCATIONS.find(l => l.locationId === locationId);
+  if (!locDef) {
+    throw new GameError('LOCATION_NOT_FOUND', `Location ${locationId} not found.`);
+  }
+
+  const treasuries = ctx.state.world.locationTreasuries ?? [];
+  const treasury = treasuries.find(t => t.locationId === locationId);
+  if (!treasury) {
+    throw new GameError('LOCATION_NOT_FOUND', `Treasury for ${locationId} not found.`);
+  }
+
+  // ── 2. 构建公账视图（含守卫、主官） ─────────────────────────────────────
+  const treasuryView = buildLocationTreasuryView(ctx, treasury, locDef);
+
+  // ── 3. 主官信息（必填，不允许为空） ─────────────────────────────────────
+  const chiefActorView: ChiefActorView = treasuryView.chiefActor ?? {
+    actorId: 'unknown',
+    displayName: '暂无主官',
+    avatarId: 'avatar_default',
+    level: 0,
+    faction: locDef.ownerFaction,
+    personalCopperExposed: treasury.copperBalance,
+  };
+
+  // ── 4. 本期进贡（active） ────────────────────────────────────────────────
+  const tributes = ctx.state.world.officeTributes ?? [];
+  const activeTribute = tributes.find(t => t.locationId === locationId && t.status === 'active');
+
+  // ── 5. 核心职位（最多取前 5 个主要服务职位） ──────────────────────────────
+  const playerActorId = `player:${ctx.playerId || 'default-player'}`;
+  const actors = ctx.state.world.actors ?? [];
+  const allPositions = buildServicePositions(locDef, actors, ctx, playerActorId);
+  // 按服务类型优先级排序：missions > shop > stamina > dungeon > arena > office_registry > ...
+  const SERVICE_PRIORITY: PowerLocationService[] = ['missions', 'shop', 'stamina', 'dungeon', 'arena', 'office_registry', 'appointment', 'evaluation', 'tribute_registry', 'promotion', 'intel', 'estate'];
+  const sortedPositions = [...allPositions].sort((a, b) => {
+    const ai = SERVICE_PRIORITY.indexOf(a.service);
+    const bi = SERVICE_PRIORITY.indexOf(b.service);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  const topPositions = sortedPositions.slice(0, 5).map(p => ({
+    positionId: p.positionId,
+    title: p.title,
+    service: p.service,
+    status: p.status,
+    occupant: {
+      actorId: p.occupant.actorId,
+      kind: p.occupant.kind,
+      displayName: p.occupant.displayName,
+      avatarId: p.occupant.avatarId,
+      level: p.occupant.level,
+      powerShare: p.occupant.powerShare,
+    },
+  }));
+
+  // ── 6. 近日账本流水（最新 10 条） ────────────────────────────────────────
+  const officeLedger = ctx.state.world.officeLedger ?? [];
+  const locationLedger = officeLedger
+    .filter(e => e.locationId === locationId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const recentLedger = locationLedger.slice(0, 10);
+
+  // ── 7. 近 7 日财务摘要（日粒度，与 WORLD_LOCATION_FINANCE_REPORT_GET 同算法） ──
+  const daysCount = 7;
+  const daysList: string[] = [];
+  for (let i = 0; i < daysCount; i++) {
+    const ms = ctx.now - i * 24 * 60 * 60 * 1000;
+    daysList.push(getGameDateString(ms));
+  }
+
+  const sortedForFinance = locationLedger; // already sorted desc
+  const financeSummary = daysList.map(dk => {
+    const dayEntries = sortedForFinance.filter(e => getGameDateString(e.createdAt) === dk);
+    let netCopperDelta = 0;
+    let incomeCopper = 0;
+    let expenseCopper = 0;
+    let raidLossCopper = 0;
+    let guardWageCopper = 0;
+    let tributePaidCopper = 0;
+
+    for (const entry of dayEntries) {
+      const delta = entry.taxValueDelta || 0;
+      netCopperDelta += delta;
+      if (delta > 0) {
+        incomeCopper += delta;
+      } else if (delta < 0) {
+        const abs = Math.abs(delta);
+        expenseCopper += abs;
+        if (entry.type === 'chief_exposed_copper_change' || entry.type === 'raid_wealth') {
+          raidLossCopper += abs;
+        } else if (entry.type === 'guard_wage' || entry.type === 'guard_wage_shortfall') {
+          guardWageCopper += abs;
+        } else if (entry.type === 'tribute_pay') {
+          tributePaidCopper += abs;
+        }
+      }
+    }
+
+    return {
+      dayKey: dk,
+      netCopperDelta,
+      incomeCopper,
+      expenseCopper,
+      raidLossCopper,
+      guardWageCopper,
+      tributePaidCopper,
+    };
+  });
+
+  // ── 8. 组装并返回 ──────────────────────────────────────────────────────
+  const dashboard: LocationChiefDashboardView = {
+    locationId,
+    locationName: locDef.name,
+    chiefActor: chiefActorView,
+    treasury: treasuryView,
+    activeTribute,
+    topPositions,
+    recentLedger,
+    financeSummary,
+  };
+
+  return {
+    ok: true,
+    action: 'WORLD_LOCATION_CHIEF_DASHBOARD_GET',
+    serverTime: ctx.now,
+    stateRevision: ctx.state.meta.stateRevision,
+    data: dashboard,
   };
 }

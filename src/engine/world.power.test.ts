@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createInitialGameState } from './gameStateFactory.js';
-import { ensureWorldInitialized, worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList, syncPlayerActor, applyWorldPowerTransfer, worldServicePositionGetDetail, worldServicePositionLedgerGet, worldServicePositionCandidatesGet } from './world.js';
+import { ensureWorldInitialized, worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList, syncPlayerActor, applyWorldPowerTransfer, worldServicePositionGetDetail, worldServicePositionLedgerGet, worldServicePositionCandidatesGet, worldLocationTreasuryGet, worldLocationRaidStart, worldLocationRaidSettle, worldLocationGuardJoin, worldLocationGuardLeave, worldLocationGuardClaim, worldOfficeTributeGet, worldOfficeTributePay, worldLocationFinanceReportGet, worldLocationChiefDashboardGet } from './world.js';
 import type { ActionContext } from './actionContext.js';
 import type { GameState } from '../types/gameState.js';
 
@@ -54,12 +54,12 @@ describe('World Actor Pool Cold Start', () => {
     expect(factions.size).toBe(6);
   });
 
-  it('all 14 locations must have actors', () => {
+  it('all 15 locations must have actors', () => {
     const state = createInitialGameState({ now: 1 });
     ensureWorldInitialized(makeCtx(state));
 
     const locations = new Set(state.world.actors.map((a) => a.locationId));
-    expect(locations.size).toBe(14);
+    expect(locations.size).toBe(15);
     expect(locations.has('imperial_palace')).toBe(true);
     expect(locations.has('player_inventory')).toBe(true);
     expect(locations.has('wine_house')).toBe(true);
@@ -78,7 +78,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(data.totalActors).toBe(261);
     expect(data.totalPowerShare).toBe(10000);
     expect(data.byFaction).toHaveLength(6);
-    expect(data.byLocation).toHaveLength(14);
+    expect(data.byLocation).toHaveLength(15);
 
     const aggregatedPower = data.byFaction.reduce((sum: number, f: any) => sum + f.powerShare, 0);
     expect(aggregatedPower).toBe(10000);
@@ -98,7 +98,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(state.world.actors).toHaveLength(261);
   });
 
-  it('WORLD_LOCATIONS_GET_STATUS should return 14 locations with correct configurations', async () => {
+  it('WORLD_LOCATIONS_GET_STATUS should return 15 locations with correct configurations', async () => {
     const state = createInitialGameState({ now: 1 });
     const ctx = makeCtx(state);
 
@@ -106,7 +106,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(response.ok).toBe(true);
     
     const locations = response.data.locations;
-    expect(locations).toHaveLength(14);
+    expect(locations).toHaveLength(15);
 
     const palace = locations.find((l: any) => l.locationId === 'imperial_palace');
     expect(palace).toBeDefined();
@@ -240,7 +240,7 @@ describe('World Actor Pool Cold Start', () => {
     expect(response.ok).toBe(true);
 
     const locations = response.data.locations;
-    expect(locations).toHaveLength(14);
+    expect(locations).toHaveLength(15);
     
     // Without powerFaction and suspicion, everything should be open (or locked if level is low)
     const refugee = locations.find((l: any) => l.locationId === 'refugee_camp');
@@ -375,8 +375,8 @@ describe('World Actor Pool Cold Start', () => {
     const overviewLocations = overviewData.byLocation;
     const statusLocations = locationsData.locations;
     
-    expect(statusLocations).toHaveLength(14);
-    expect(overviewLocations).toHaveLength(14);
+    expect(statusLocations).toHaveLength(15);
+    expect(overviewLocations).toHaveLength(15);
     
     for (const statusLoc of statusLocations) {
       const overviewLoc = overviewLocations.find((l: any) => l.locationId === statusLoc.locationId);
@@ -674,7 +674,7 @@ describe('WORLD_SERVICE_POSITIONS_GET_LIST', () => {
     expect(response.ok).toBe(true);
     const { positions } = (response as any).data;
     expect(Array.isArray(positions)).toBe(true);
-    // 14 locations with services across them — total positions > 10
+    // 15 locations with services across them — total positions > 10
     expect(positions.length).toBeGreaterThan(10);
   });
 
@@ -1048,6 +1048,117 @@ describe('Office Ledger & Bot Simulation V1', () => {
     expect(resDetail.data.ledgerPreview).toHaveLength(1);
     expect(resDetail.data.ledgerPreview[0]!.entryId).toBe('e1');
   });
+
+  it('supports locationId filtering and AND combination with positionId/actorId and validates limit & newest-first order & bot simulation behavior', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    state.world.officeLedger = [
+      {
+        entryId: 'e1',
+        createdAt: ctx.now,
+        positionId: 'weaving_bureau:missions',
+        locationId: 'weaving_bureau',
+        service: 'missions' as const,
+        beneficiaryActorId: 'bot_1',
+        type: 'bot_tax' as const,
+        description: 'd1',
+      },
+      {
+        entryId: 'e2',
+        createdAt: ctx.now + 1000,
+        positionId: 'northern_bureau:missions',
+        locationId: 'northern_bureau',
+        service: 'missions' as const,
+        beneficiaryActorId: 'bot_2',
+        type: 'bot_power' as const,
+        description: 'd2',
+      },
+      {
+        entryId: 'e3',
+        createdAt: ctx.now + 2000,
+        positionId: 'weaving_bureau:missions',
+        locationId: 'weaving_bureau',
+        service: 'missions' as const,
+        beneficiaryActorId: 'bot_2',
+        type: 'bot_tax' as const,
+        description: 'd3',
+      },
+    ];
+
+    // 1. WORLD_SERVICE_POSITION_LEDGER_GET with locationId only
+    const resLoc = await worldServicePositionLedgerGet(ctx, { locationId: 'weaving_bureau' });
+    expect(resLoc.ok).toBe(true);
+    expect(resLoc.data.entries).toHaveLength(2);
+    // newest-first order (e3 at index 0, e1 at index 1)
+    expect(resLoc.data.entries[0]!.entryId).toBe('e3');
+    expect(resLoc.data.entries[1]!.entryId).toBe('e1');
+    expect(resLoc.data.entries.every(e => e.locationId === 'weaving_bureau')).toBe(true);
+
+    // 2. AND filtering: locationId + positionId
+    const resAndPos = await worldServicePositionLedgerGet(ctx, {
+      locationId: 'weaving_bureau',
+      positionId: 'weaving_bureau:missions',
+    });
+    expect(resAndPos.ok).toBe(true);
+    expect(resAndPos.data.entries).toHaveLength(2);
+
+    const resAndPosNone = await worldServicePositionLedgerGet(ctx, {
+      locationId: 'northern_bureau',
+      positionId: 'weaving_bureau:missions',
+    });
+    expect(resAndPosNone.ok).toBe(true);
+    expect(resAndPosNone.data.entries).toHaveLength(0);
+
+    // 3. AND filtering: locationId + actorId
+    const resAndActor = await worldServicePositionLedgerGet(ctx, {
+      locationId: 'weaving_bureau',
+      actorId: 'bot_2',
+    });
+    expect(resAndActor.ok).toBe(true);
+    expect(resAndActor.data.entries).toHaveLength(1);
+    expect(resAndActor.data.entries[0]!.entryId).toBe('e3');
+
+    // 4. limit default and max regression validation
+    const largeLedger = [];
+    for (let i = 0; i < 60; i++) {
+      largeLedger.push({
+        entryId: `temp_${i}`,
+        createdAt: ctx.now + i * 1000,
+        positionId: 'weaving_bureau:missions',
+        locationId: 'weaving_bureau',
+        service: 'missions' as const,
+        beneficiaryActorId: 'bot_1',
+        type: 'bot_tax' as const,
+        description: `d_${i}`,
+      });
+    }
+    state.world.officeLedger = largeLedger;
+
+    // limit default should be 20
+    const resDefaultLimit = await worldServicePositionLedgerGet(ctx, {});
+    expect(resDefaultLimit.data.entries).toHaveLength(20);
+    expect(resDefaultLimit.data.entries[0]!.entryId).toBe('temp_59'); // newest first
+
+    // limit max is capped at 50
+    const resMaxLimit = await worldServicePositionLedgerGet(ctx, { limit: 100 });
+    expect(resMaxLimit.data.entries).toHaveLength(50);
+    expect(resMaxLimit.data.entries[0]!.entryId).toBe('temp_59'); // newest first
+
+    // 5. Bot simulation cooldown is triggered and conserves 10000 power
+    const simulationBefore = state.world.botSimulation?.lastSimulatedAt;
+    state.world.officeLedger = [];
+    // Advance time past 10 minutes (600,000 ms) to trigger bot simulation
+    ctx.now += 601 * 1000;
+    await worldServicePositionLedgerGet(ctx, { locationId: 'weaving_bureau' });
+    const simulationAfter = state.world.botSimulation?.lastSimulatedAt;
+    expect(simulationAfter).toBe(ctx.now);
+    expect(simulationAfter).not.toBe(simulationBefore);
+
+    const totalPower = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+    expect(totalPower).toBe(10000);
+  });
 });
 
 describe('Office Candidates and Plotting V1', () => {
@@ -1168,3 +1279,817 @@ describe('Office Candidates and Plotting V1', () => {
     expect(totalPowerAfter).toBe(totalPowerBefore);
   });
 });
+
+describe('Location Treasury and Raid V1', () => {
+  it('initializes location treasuries and processes query', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    expect(state.world.locationTreasuries).toBeDefined();
+    expect(state.world.locationTreasuries!.length).toBeGreaterThan(0);
+
+    const res = await worldLocationTreasuryGet(ctx, { locationId: 'weaving_bureau' });
+    expect(res.ok).toBe(true);
+    expect(res.data.locationId).toBe('weaving_bureau');
+    expect(res.data.locationName).toBe('江南织造局');
+    expect(res.data.copperBalance).toBeGreaterThan(0);
+    expect(res.data.goodsValue).toBeGreaterThan(0);
+    expect(res.data.powerValue).toBeGreaterThan(0);
+
+    // Invalid location
+    await expect(worldLocationTreasuryGet(ctx, { locationId: 'invalid' })).rejects.toThrow();
+  });
+
+  it('increases treasury balances upon bot simulation and mission settlements', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    const tBefore = { ...state.world.locationTreasuries!.find(t => t.locationId === 'weaving_bureau')! };
+
+    // 1. Bot simulation increases treasury
+    // Force simulation time trigger
+    ctx.now += 601 * 1000;
+    await worldLocationTreasuryGet(ctx, { locationId: 'weaving_bureau' });
+    
+    // Check total treasuries changed
+    const tAfterSim = state.world.locationTreasuries!.find(t => t.locationId === 'weaving_bureau')!;
+    const someIncreased = state.world.locationTreasuries!.some(t => {
+      const original = tBefore.locationId === t.locationId ? tBefore : { copperBalance: 0, goodsValue: 0, powerValue: 0 };
+      return t.copperBalance > original.copperBalance || t.goodsValue > original.goodsValue || t.powerValue > original.powerValue;
+    });
+    expect(someIncreased).toBe(true);
+  });
+
+  it('runs the raid battle and processes settlements for wealth, power, and fame choices', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    // Give player high attributes to guarantee player win (or force HP very high)
+    state.attributes.strength = 10000;
+    state.attributes.intelligence = 10000;
+    state.attributes.agility = 10000;
+    state.attributes.constitution = 10000;
+
+    // 1. Start raid
+    const resStart = await worldLocationRaidStart(ctx, { locationId: 'weaving_bureau' });
+    expect(resStart.ok).toBe(true);
+    expect(resStart.data.raidId).toBeDefined();
+    expect(resStart.data.canChooseOutcome).toBe(true);
+    expect(resStart.data.battleResult.playerWon).toBe(true);
+
+    const raidId = resStart.data.raidId;
+    const treasuryBefore = resStart.data.treasuryBefore;
+
+    // 2. Choice: wealth
+    const playerCopperBefore = state.resources.copper;
+    const resSettle = await worldLocationRaidSettle(ctx, { raidId, choice: 'wealth' });
+    expect(resSettle.ok).toBe(true);
+    expect(resSettle.data.rewardCopper).toBeGreaterThan(0);
+    expect(state.resources.copper).toBe(playerCopperBefore + resSettle.data.rewardCopper);
+    expect(resSettle.data.treasuryAfter.copperBalance).toBeLessThan(treasuryBefore.copperBalance);
+
+    // Double settle throws
+    await expect(worldLocationRaidSettle(ctx, { raidId, choice: 'wealth' })).rejects.toThrow('already been settled');
+  });
+
+  it('validates mount carry multiplier for wealth choice', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    state.attributes.strength = 10000;
+    state.attributes.intelligence = 10000;
+    state.attributes.agility = 10000;
+    state.attributes.constitution = 10000;
+
+    // Set player mount to ox (2.0x carry multiplier)
+    state.mount = {
+      timeMultiplierBp: 5000,
+      expiresAt: ctx.now + 3600 * 1000,
+      name: '大青牛',
+      tier: 'ox',
+    };
+
+    const resStart = await worldLocationRaidStart(ctx, { locationId: 'weaving_bureau' });
+    expect(resStart.ok).toBe(true);
+    const raidId = resStart.data.raidId;
+
+    const resSettle = await worldLocationRaidSettle(ctx, { raidId, choice: 'wealth' });
+    expect(resSettle.ok).toBe(true);
+    const deducted = Math.floor(resStart.data.treasuryBefore.copperBalance * 0.5) + Math.floor(resStart.data.treasuryBefore.goodsValue * 0.5);
+    expect(resSettle.data.rewardCopper).toBe(Math.floor(deducted * 2.0));
+  });
+
+  it('processes choice: power and choice: fame and maintains 10000 total power share', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    state.attributes.strength = 10000;
+    state.attributes.intelligence = 10000;
+    state.attributes.agility = 10000;
+    state.attributes.constitution = 10000;
+
+    // 1. Choice: power
+    const resStartPower = await worldLocationRaidStart(ctx, { locationId: 'refugee_camp' });
+    const raidIdPower = resStartPower.data.raidId;
+
+    const playerPowerBefore = state.world.actors.find(a => a.actorId === `player:test-player`)?.powerShare ?? 0;
+    const totalPowerBefore = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+
+    const resSettlePower = await worldLocationRaidSettle(ctx, { raidId: raidIdPower, choice: 'power' });
+    expect(resSettlePower.ok).toBe(true);
+    expect(resSettlePower.data.rewardPower).toBeGreaterThan(0);
+
+    const playerPowerAfter = state.world.actors.find(a => a.actorId === `player:test-player`)?.powerShare ?? 0;
+    expect(playerPowerAfter).toBe(playerPowerBefore + resSettlePower.data.rewardPower);
+
+    const totalPowerAfter = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+    expect(totalPowerAfter).toBe(10000);
+    expect(totalPowerAfter).toBe(totalPowerBefore);
+
+    // 2. Choice: fame
+    const resStartFame = await worldLocationRaidStart(ctx, { locationId: 'wine_house' });
+    const raidIdFame = resStartFame.data.raidId;
+    const playerPrestigeBefore = state.resources.prestige ?? 0;
+
+    const resSettleFame = await worldLocationRaidSettle(ctx, { raidId: raidIdFame, choice: 'fame' });
+    expect(resSettleFame.ok).toBe(true);
+    expect(resSettleFame.data.rewardPrestige).toBeGreaterThan(0);
+    expect(state.resources.prestige).toBe(playerPrestigeBefore + resSettleFame.data.rewardPrestige);
+
+    // 3. Ledger verification
+    const resLedger = await worldServicePositionLedgerGet(ctx, { locationId: 'wine_house' });
+    expect(resLedger.ok).toBe(true);
+    expect(resLedger.data.entries.some(e => e.type === 'raid_fame')).toBe(true);
+  });
+});
+
+describe('Location Guard Duty V1', () => {
+  it('WORLD_LOCATION_TREASURY_GET returns guards and guardHint', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    const res = await worldLocationTreasuryGet(ctx, { locationId: 'weaving_bureau' });
+    expect(res.ok).toBe(true);
+    expect(res.data.guards).toEqual([]);
+    expect(res.data.guardHint).toContain('0/3');
+  });
+
+  it('allows joining guard duty, enforces limits, double join, and slots', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    // Join once
+    const resJoin = await worldLocationGuardJoin(ctx, { locationId: 'weaving_bureau', durationMinutes: 60 });
+    expect(resJoin.ok).toBe(true);
+    expect(resJoin.data.guards).toHaveLength(1);
+    expect(resJoin.data.guardHint).toContain('1/3');
+    expect(resJoin.data.guards[0].actorId).toBe('player:test-player');
+    expect(resJoin.data.guards[0].wageCopper).toBeGreaterThan(0);
+    expect(resJoin.data.guards[0].status).toBe('active');
+
+    // Double join same location throws error
+    await expect(
+      worldLocationGuardJoin(ctx, { locationId: 'weaving_bureau', durationMinutes: 60 })
+    ).rejects.toThrow('already guarding');
+
+    // Test slot full limit
+    // We mock another 2 guards at weaving_bureau in state
+    state.world.locationGuardDuties!.push({
+      dutyId: 'duty_mock_1',
+      locationId: 'weaving_bureau',
+      actorId: 'bot:1',
+      actorDisplayName: '守卫1',
+      actorAvatarId: 'avatar_1',
+      actorKind: 'bot',
+      faction: 'imperial',
+      level: 10,
+      combatRating: 100,
+      startsAt: ctx.now,
+      endsAt: ctx.now + 3600 * 1000,
+      wageCopper: 50,
+      status: 'active'
+    });
+    state.world.locationGuardDuties!.push({
+      dutyId: 'duty_mock_2',
+      locationId: 'weaving_bureau',
+      actorId: 'bot:2',
+      actorDisplayName: '守卫2',
+      actorAvatarId: 'avatar_2',
+      actorKind: 'bot',
+      faction: 'imperial',
+      level: 10,
+      combatRating: 100,
+      startsAt: ctx.now,
+      endsAt: ctx.now + 3600 * 1000,
+      wageCopper: 50,
+      status: 'active'
+    });
+
+    const resQueryFull = await worldLocationTreasuryGet(ctx, { locationId: 'weaving_bureau' });
+    expect(resQueryFull.data.guards).toHaveLength(3);
+
+    // Join when slots full (max is 3) throws slot full error
+    const ctxOther = { ...ctx, playerId: 'other-player' };
+    syncPlayerActor(ctxOther);
+    await expect(
+      worldLocationGuardJoin(ctxOther, { locationId: 'weaving_bureau', durationMinutes: 60 })
+    ).rejects.toThrow('slots are full');
+  });
+
+  it('allows leaving guard duty to abandon rewards', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const resJoin = await worldLocationGuardJoin(ctx, { locationId: 'weaving_bureau', durationMinutes: 30 });
+    const dutyId = resJoin.data.guards[0].dutyId;
+
+    // Leave guard duty
+    const resLeave = await worldLocationGuardLeave(ctx, { dutyId });
+    expect(resLeave.ok).toBe(true);
+    expect(resLeave.data.guards).toHaveLength(0); // abandoned is filtered out
+
+    const duty = state.world.locationGuardDuties!.find(d => d.dutyId === dutyId);
+    expect(duty?.status).toBe('abandoned');
+
+    // Trying to leave again or claim throws
+    await expect(worldLocationGuardLeave(ctx, { dutyId })).rejects.toThrow('not active');
+    await expect(worldLocationGuardClaim(ctx, { dutyId })).rejects.toThrow('already been settled or abandoned');
+  });
+
+  it('claims wage correctly (full and shortfall) when time ends', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const resJoin = await worldLocationGuardJoin(ctx, { locationId: 'weaving_bureau', durationMinutes: 60 });
+    const dutyId = resJoin.data.guards[0].dutyId;
+    const wageCopper = resJoin.data.guards[0].wageCopper;
+
+    // Claim early throws
+    await expect(worldLocationGuardClaim(ctx, { dutyId })).rejects.toThrow('shift has not ended yet');
+
+    // Simulate shift completion
+    ctx.now += 61 * 60 * 1000;
+
+    const copperBefore = state.resources.copper;
+    const resClaim = await worldLocationGuardClaim(ctx, { dutyId });
+    expect(resClaim.ok).toBe(true);
+    expect(resClaim.data.wagePaid).toBe(wageCopper);
+    expect(resClaim.data.shortfall).toBe(0);
+    expect(state.resources.copper).toBe(copperBefore + wageCopper);
+
+    // Double claim throws
+    await expect(worldLocationGuardClaim(ctx, { dutyId })).rejects.toThrow('already been settled or abandoned');
+
+    // Shortfall verification
+    const treasury = state.world.locationTreasuries!.find(t => t.locationId === 'weaving_bureau')!;
+    treasury.copperBalance = 10;
+
+    // Join again
+    const resJoin2 = await worldLocationGuardJoin(ctx, { locationId: 'weaving_bureau', durationMinutes: 30 });
+    const dutyId2 = resJoin2.data.guards[0].dutyId;
+    const wageExpected = resJoin2.data.guards[0].wageCopper;
+
+    ctx.now += 31 * 60 * 1000;
+    state.world.botSimulation!.lastSimulatedAt = ctx.now;
+    const playerCopperBefore2 = state.resources.copper;
+    const resClaim2 = await worldLocationGuardClaim(ctx, { dutyId: dutyId2 });
+    expect(resClaim2.ok).toBe(true);
+    expect(resClaim2.data.wagePaid).toBe(10);
+    expect(resClaim2.data.shortfall).toBe(wageExpected - 10);
+    expect(state.resources.copper).toBe(playerCopperBefore2 + 10);
+    expect(resClaim2.data.treasuryAfter.copperBalance).toBe(0);
+  });
+
+  it('prioritizes guard defense and sets reason appropriately in raids', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    state.world.locationGuardDuties!.push({
+      dutyId: 'bot_guard_duty',
+      locationId: 'weaving_bureau',
+      actorId: 'bot_guard_actor',
+      actorDisplayName: '铁浮屠',
+      actorAvatarId: 'avatar_9',
+      actorKind: 'bot',
+      faction: 'imperial',
+      level: 15,
+      combatRating: 250,
+      startsAt: ctx.now,
+      endsAt: ctx.now + 3600 * 1000,
+      wageCopper: 50,
+      status: 'active'
+    });
+
+    state.world.actors.push({
+      actorId: 'bot_guard_actor',
+      kind: 'bot',
+      displayName: '铁浮屠',
+      raceId: 'RACE_01',
+      classId: 'CLASS_A',
+      faction: 'imperial',
+      locationId: 'weaving_bureau',
+      level: 15,
+      powerShare: 100,
+      combatSnapshot: {
+        level: 15,
+        classId: 'CLASS_A',
+        attributes: { strength: 40, intelligence: 40, agility: 40, constitution: 40, luck: 10 },
+        combatStats: { hp: 200, armor: 100, damageMin: 20, damageMax: 30, critChanceBp: 500 },
+        equipmentSummary: { itemPowerTotal: 100 }
+      }
+    });
+
+    state.attributes.strength = 10000;
+    state.attributes.intelligence = 10000;
+    state.attributes.agility = 10000;
+    state.attributes.constitution = 10000;
+
+    const resStart = await worldLocationRaidStart(ctx, { locationId: 'weaving_bureau' });
+    expect(resStart.ok).toBe(true);
+    expect(resStart.data.defenderActor).toBeDefined();
+    expect(resStart.data.defenderActor!.actorId).toBe('bot_guard_actor');
+    expect(resStart.data.defenderActor!.reason).toBe('场所值班守卫');
+  });
+});
+
+describe('Global World State V1 Integration Tests', () => {
+  it('multiple contexts sharing the same world state should see identical actors and locations', async () => {
+    const globalWorldState = { status: 'UNINITIALIZED', actors: [] } as any;
+
+    const stateA = createInitialGameState({ now: 1_000_000, playerId: 'player-a' });
+    stateA.world = globalWorldState;
+    const ctxA = makeCtx(stateA);
+    ctxA.playerId = 'player-a';
+
+    const stateB = createInitialGameState({ now: 1_000_000, playerId: 'player-b' });
+    stateB.world = globalWorldState;
+    const ctxB = makeCtx(stateB);
+    ctxB.playerId = 'player-b';
+
+    ensureWorldInitialized(ctxA);
+
+    expect(ctxB.state.world.status).toBe('ACTIVE');
+    expect(ctxB.state.world.actors).toHaveLength(260);
+
+    syncPlayerActor(ctxA);
+    const playerAActor = ctxB.state.world.actors.find(a => a.actorId === 'player:player-a');
+    expect(playerAActor).toBeDefined();
+    expect(playerAActor?.displayName).toBe('玩家');
+  });
+
+  it('joining guard duty on player A displays A to player B, and A defends when B raids', async () => {
+    const globalWorldState = { status: 'UNINITIALIZED', actors: [] } as any;
+
+    const stateA = createInitialGameState({ now: 1_000_000, playerId: 'player-a' });
+    stateA.world = globalWorldState;
+    const ctxA = makeCtx(stateA);
+    ctxA.playerId = 'player-a';
+
+    const stateB = createInitialGameState({ now: 1_000_000, playerId: 'player-b' });
+    stateB.world = globalWorldState;
+    const ctxB = makeCtx(stateB);
+    ctxB.playerId = 'player-b';
+
+    ensureWorldInitialized(ctxA);
+    syncPlayerActor(ctxA);
+    syncPlayerActor(ctxB);
+
+    const resJoin = await worldLocationGuardJoin(ctxA, { locationId: 'weaving_bureau', durationMinutes: 60 });
+    expect(resJoin.ok).toBe(true);
+
+    const resTreasury = await worldLocationTreasuryGet(ctxB, { locationId: 'weaving_bureau' });
+    expect(resTreasury.ok).toBe(true);
+    expect(resTreasury.data.guards).toHaveLength(1);
+    expect(resTreasury.data.guards[0].actorId).toBe('player:player-a');
+
+    const resRaid = await worldLocationRaidStart(ctxB, { locationId: 'weaving_bureau' });
+    expect(resRaid.ok).toBe(true);
+    expect(resRaid.data.defenderActor?.actorId).toBe('player:player-a');
+    expect(resRaid.data.defenderActor?.reason).toBe('场所值班守卫');
+  });
+
+  it('new players sync into world.actors, increasing total census dynamically and maintaining 10000 power share', async () => {
+    const globalWorldState = { status: 'UNINITIALIZED', actors: [] } as any;
+
+    const stateA = createInitialGameState({ now: 1_000_000, playerId: 'player-a' });
+    stateA.world = globalWorldState;
+    const ctxA = makeCtx(stateA);
+    ctxA.playerId = 'player-a';
+
+    ensureWorldInitialized(ctxA);
+    syncPlayerActor(ctxA);
+
+    const overview1 = await worldActorsGetOverview(ctxA, {});
+    expect(overview1.data.totalActors).toBe(261);
+
+    const stateB = createInitialGameState({ now: 1_000_000, playerId: 'player-b' });
+    stateB.world = globalWorldState;
+    const ctxB = makeCtx(stateB);
+    ctxB.playerId = 'player-b';
+    syncPlayerActor(ctxB);
+
+    const overview2 = await worldActorsGetOverview(ctxA, {});
+    expect(overview2.data.totalActors).toBe(262);
+
+    const totalPower = globalWorldState.actors.reduce((sum: number, a: any) => sum + a.powerShare, 0);
+    expect(totalPower).toBe(10000);
+  });
+
+  describe('Office Private Treasury and Weekly Tribute V1', () => {
+    function makeCtx(state: GameState, now = 1_000_000): ActionContext {
+      let dirty = false;
+      let worldDirty = false;
+      return {
+        playerId: 'test-player',
+        now,
+        state,
+        get dirty() { return dirty; },
+        markDirty() { dirty = true; },
+        get worldDirty() { return worldDirty; },
+        markWorldDirty() { worldDirty = true; }
+      };
+    }
+
+    it('verifies that Emperor and Wei Zhongxian are present and total power share is 10000', () => {
+      const state = createInitialGameState({ now: 1_000_000 });
+      const ctx = makeCtx(state);
+      ensureWorldInitialized(ctx);
+
+      const emperor = state.world.actors.find(a => a.actorId === 'reserved:emperor_tianqi');
+      const wei = state.world.actors.find(a => a.actorId === 'reserved:wei_zhongxian');
+
+      expect(emperor).toBeDefined();
+      expect(emperor?.displayName).toBe('朱由校');
+      expect(emperor?.title).toBe('大明天启皇帝');
+      expect(emperor?.faction).toBe('imperial');
+      expect(emperor?.locationId).toBe('imperial_palace');
+
+      expect(wei).toBeDefined();
+      expect(wei?.displayName).toBe('魏忠贤');
+      expect(wei?.title).toBe('司礼监秉笔太监');
+      expect(wei?.faction).toBe('imperial');
+      expect(wei?.locationId).toBe('imperial_palace');
+
+      const totalPower = state.world.actors.reduce((sum, a) => sum + a.powerShare, 0);
+      expect(totalPower).toBe(10000);
+      expect(state.world.actors).toHaveLength(260); // 2 reserved + 258 bots
+    });
+
+    it('maps chief actors for palace and normal locations correctly', async () => {
+      const state = createInitialGameState({ now: 1_000_000 });
+      const ctx = makeCtx(state);
+      ensureWorldInitialized(ctx);
+
+      // Palace treasury chief must be Wei Zhongxian
+      const resPalace = await worldLocationTreasuryGet(ctx, { locationId: 'imperial_palace' });
+      expect(resPalace.ok).toBe(true);
+      expect(resPalace.data.chiefActor).toBeDefined();
+      expect(resPalace.data.chiefActor?.actorId).toBe('reserved:wei_zhongxian');
+      expect(resPalace.data.chiefActor?.displayName).toBe('魏忠贤');
+      expect(resPalace.data.chiefActor?.title).toBe('司礼监秉笔太监');
+
+      // Normal locations (e.g. weaving_bureau) should resolve a chief actor
+      const resWeaving = await worldLocationTreasuryGet(ctx, { locationId: 'weaving_bureau' });
+      expect(resWeaving.ok).toBe(true);
+      expect(resWeaving.data.chiefActor).toBeDefined();
+      expect(resWeaving.data.chiefActor?.personalCopperExposed).toBe(resWeaving.data.copperBalance);
+    });
+
+    it('initializes and queries weekly tributes', async () => {
+      const state = createInitialGameState({ now: 1_000_000 });
+      const ctx = makeCtx(state);
+      ensureWorldInitialized(ctx);
+
+      const resTributes = await worldOfficeTributeGet(ctx, {});
+      expect(resTributes.ok).toBe(true);
+      const terms = resTributes.data.terms;
+      expect(terms.length).toBeGreaterThan(0);
+
+      // Each term must default to active, due Wei Zhongxian, and reviewLabel '本周未考'
+      for (const term of terms) {
+        expect(term.status).toBe('active');
+        expect(term.superiorActorId).toBe('reserved:wei_zhongxian');
+        expect(term.reviewLabel).toBe('本周未考');
+        expect(term.dueCopper).toBeGreaterThan(1000);
+      }
+    });
+
+    it('enforces tribute pay permissions and processes valid pay', async () => {
+      const state = createInitialGameState({ now: 1_000_000 });
+      const ctx = makeCtx(state);
+      ensureWorldInitialized(ctx);
+
+      const resTributes = await worldOfficeTributeGet(ctx, {});
+      const term = resTributes.data.terms[0];
+      expect(term).toBeDefined();
+
+      // 1. Try to pay from a non-holder actor (by default, player actor ID is 'player:default-player')
+      term.officeHolderActorId = 'some_other_bot';
+      await expect(worldOfficeTributePay(ctx, { tributeId: term.tributeId, amountCopper: 500 }))
+        .rejects.toThrow('You cannot pay tribute for another officer');
+
+      // 2. Set holder to current player to pass authorization
+      const playerActorId = 'player:test-player';
+      term.officeHolderActorId = playerActorId;
+
+      // 3. Try to pay with insufficient copper
+      state.resources.copper = 100;
+      await expect(worldOfficeTributePay(ctx, { tributeId: term.tributeId, amountCopper: 500 }))
+        .rejects.toThrow('You do not have enough copper');
+
+      // 4. Pay successfully
+      state.resources.copper = 1000;
+      const resPalaceBefore = await worldLocationTreasuryGet(ctx, { locationId: 'imperial_palace' });
+      const palaceCopperBefore = resPalaceBefore.data.copperBalance;
+
+      const resPay = await worldOfficeTributePay(ctx, { tributeId: term.tributeId, amountCopper: 400 });
+      expect(resPay.ok).toBe(true);
+      expect(resPay.data.term.paidCopper).toBe(400);
+      expect(state.resources.copper).toBe(600);
+      expect(resPay.data.copperAfter).toBe(600);
+
+      const resPalaceAfter = await worldLocationTreasuryGet(ctx, { locationId: 'imperial_palace' });
+      expect(resPalaceAfter.data.copperBalance).toBe(palaceCopperBefore + 400);
+
+      // 5. Verify ledgers are written
+      const ledger = state.world.officeLedger ?? [];
+      const entries = ledger.filter(e => e.type === 'tribute_pay');
+      expect(entries.length).toBe(2); // double logging
+      const payer = entries.find(e => e.locationId === term.locationId);
+      const receiver = entries.find(e => e.locationId === 'imperial_palace');
+      expect(payer).toBeDefined();
+      expect(payer?.taxValueDelta).toBe(-400);
+      expect(receiver).toBeDefined();
+      expect(receiver?.taxValueDelta).toBe(400);
+    });
+
+    it('settles passed/failed status on tribute expiration', async () => {
+      const state = createInitialGameState({ now: 1_000_000 });
+      const ctx = makeCtx(state);
+      ensureWorldInitialized(ctx);
+
+      const resTributes = await worldOfficeTributeGet(ctx, {});
+      const term = resTributes.data.terms[0];
+      term.officeHolderActorId = 'player:test-player';
+
+      // 1. Pay partially (less than due)
+      state.resources.copper = 5000;
+      await worldOfficeTributePay(ctx, { tributeId: term.tributeId, amountCopper: 100 });
+
+      // 2. Fast forward past termEndsAt
+      ctx.now = term.termEndsAt + 1000;
+
+      // Trigger update/check
+      const resTributesAfter = await worldOfficeTributeGet(ctx, { includeHistory: true });
+      const termAfter = resTributesAfter.data.terms.find(t => t.tributeId === term.tributeId);
+      expect(termAfter?.status).toBe('failed');
+      expect(termAfter?.reviewLabel).toBe('欠贡');
+
+      // Verify ledger entry for tribute_failed
+      const entry = state.world.officeLedger?.find(e => e.type === 'tribute_failed' && e.locationId === term.locationId);
+      expect(entry).toBeDefined();
+    });
+
+    it('generates finance report with reverse running balances and daily rows', async () => {
+      const state = createInitialGameState({ now: 1_000_000 });
+      const ctx = makeCtx(state);
+      ensureWorldInitialized(ctx);
+
+      const locId = 'weaving_bureau';
+      const resReportInit = await worldLocationFinanceReportGet(ctx, { locationId: locId });
+      expect(resReportInit.ok).toBe(true);
+      expect(resReportInit.data.currentExposedCopper).toBeDefined();
+      expect(resReportInit.data.dailyRows).toHaveLength(7);
+
+      // Let's add some ledger activities
+      const treasury = state.world.locationTreasuries!.find(t => t.locationId === locId)!;
+
+      state.world.officeLedger = [
+        {
+          entryId: 'test_l1',
+          createdAt: ctx.now - 5000,
+          positionId: 'weaving_bureau:shop',
+          locationId: locId,
+          service: 'shop',
+          type: 'guard_wage',
+          taxValueDelta: -100,
+          description: 'Test wage'
+        },
+        {
+          entryId: 'test_l2',
+          createdAt: ctx.now - 24 * 60 * 60 * 1000 - 5000,
+          positionId: 'weaving_bureau:shop',
+          locationId: locId,
+          service: 'shop',
+          type: 'chief_exposed_copper_change',
+          taxValueDelta: -200,
+          description: 'Test raid'
+        },
+        {
+          entryId: 'test_l3',
+          createdAt: ctx.now - 2 * 24 * 60 * 60 * 1000 - 5000,
+          positionId: 'weaving_bureau:shop',
+          locationId: locId,
+          service: 'shop',
+          type: 'shop_tax',
+          taxValueDelta: 300,
+          description: 'Test tax'
+        }
+      ];
+
+      treasury.copperBalance = 1000;
+
+      const resReport = await worldLocationFinanceReportGet(ctx, { locationId: locId });
+      const rows = resReport.data.dailyRows;
+
+      expect(rows[0].netCopperDelta).toBe(-100);
+      expect(rows[0].expenseCopper).toBe(100);
+      expect(rows[0].peakCopper).toBe(1100);
+
+      expect(rows[1].netCopperDelta).toBe(-200);
+      expect(rows[1].raidLossCopper).toBe(200);
+      expect(rows[1].peakCopper).toBe(1300);
+
+      expect(rows[2].netCopperDelta).toBe(300);
+      expect(rows[2].incomeCopper).toBe(300);
+      expect(rows[2].peakCopper).toBe(1300);
+    });
+  });
+});
+
+describe('Location Chief Dashboard V1', () => {
+  it('returns a valid dashboard with chiefActor, treasury, topPositions, financeSummary, and recentLedger', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const locId = 'northern_bureau';
+    const res = await worldLocationChiefDashboardGet(ctx, { locationId: locId });
+
+    expect(res.ok).toBe(true);
+    expect(res.data.locationId).toBe(locId);
+    expect(res.data.locationName).toBeTruthy();
+    expect(res.data.chiefActor).toBeDefined();
+    expect(res.data.chiefActor.actorId).toBeTruthy();
+    expect(res.data.chiefActor.displayName).toBeTruthy();
+    expect(res.data.treasury).toBeDefined();
+    expect(res.data.treasury.locationId).toBe(locId);
+    expect(res.data.topPositions).toBeInstanceOf(Array);
+    expect(res.data.topPositions.length).toBeGreaterThan(0);
+    expect(res.data.topPositions.length).toBeLessThanOrEqual(5);
+    expect(res.data.financeSummary).toHaveLength(7);
+    expect(res.data.recentLedger).toBeInstanceOf(Array);
+  });
+
+  it('palace (imperial_palace) dashboard maps chiefActor to Wei Zhongxian', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const res = await worldLocationChiefDashboardGet(ctx, { locationId: 'imperial_palace' });
+
+    expect(res.ok).toBe(true);
+    expect(res.data.chiefActor.actorId).toBe('reserved:wei_zhongxian');
+    expect(res.data.chiefActor.displayName).toBe('魏忠贤');
+  });
+
+  it('throws LOCATION_NOT_FOUND when locationId is missing or unknown', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+
+    try {
+      await worldLocationChiefDashboardGet(ctx, {});
+      expect.fail('Should have thrown');
+    } catch (e: any) {
+      expect(e.code ?? e.errorCode ?? e.message).toMatch(/LOCATION_NOT_FOUND/);
+    }
+
+    try {
+      await worldLocationChiefDashboardGet(ctx, { locationId: 'nonexistent_location' });
+      expect.fail('Should have thrown');
+    } catch (e: any) {
+      expect(e.code ?? e.errorCode ?? e.message).toMatch(/LOCATION_NOT_FOUND/);
+    }
+  });
+
+  it('financeSummary and recentLedger correctly reflect injected ledger entries', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const locId = 'weaving_bureau';
+    const treasury = state.world.locationTreasuries!.find(t => t.locationId === locId)!;
+    treasury.copperBalance = 500;
+
+    // Inject ledger entries: today: 2 entries (guard_wage + tribute_pay), yesterday: 1 entry (shop_tax)
+    state.world.officeLedger = [
+      {
+        entryId: 'dl1',
+        createdAt: ctx.now - 100,
+        positionId: 'weaving_bureau:missions',
+        locationId: locId,
+        service: 'missions',
+        type: 'guard_wage',
+        taxValueDelta: -50,
+        description: 'Guard wage'
+      },
+      {
+        entryId: 'dl2',
+        createdAt: ctx.now - 200,
+        positionId: 'weaving_bureau:missions',
+        locationId: locId,
+        service: 'missions',
+        type: 'tribute_pay',
+        taxValueDelta: -150,
+        description: 'Tribute pay'
+      },
+      {
+        entryId: 'dl3',
+        createdAt: ctx.now - 24 * 60 * 60 * 1000 - 100,
+        positionId: 'weaving_bureau:shop',
+        locationId: locId,
+        service: 'shop',
+        type: 'shop_tax',
+        taxValueDelta: 200,
+        description: 'Tax income'
+      },
+    ];
+
+    const res = await worldLocationChiefDashboardGet(ctx, { locationId: locId });
+
+    // recentLedger should have all 3 entries (newest first)
+    expect(res.data.recentLedger).toHaveLength(3);
+    expect(res.data.recentLedger[0].entryId).toBe('dl1');
+
+    // financeSummary day 0 (today): guard_wage -50 + tribute_pay -150 = net -200
+    const today = res.data.financeSummary[0];
+    expect(today.netCopperDelta).toBe(-200);
+    expect(today.guardWageCopper).toBe(50);
+    expect(today.tributePaidCopper).toBe(150);
+    expect(today.expenseCopper).toBe(200);
+    expect(today.incomeCopper).toBe(0);
+
+    // financeSummary day 1 (yesterday): shop_tax +200
+    const yesterday = res.data.financeSummary[1];
+    expect(yesterday.netCopperDelta).toBe(200);
+    expect(yesterday.incomeCopper).toBe(200);
+    expect(yesterday.expenseCopper).toBe(0);
+  });
+
+  it('activeTribute is populated when an active tribute term exists for the location', async () => {
+    const state = createInitialGameState({ now: 1_000_000 });
+    const ctx = makeCtx(state);
+    ensureWorldInitialized(ctx);
+    syncPlayerActor(ctx);
+
+    const locId = 'weaving_bureau';
+
+    // Initially no active tribute before updateOfficeTributes runs
+    // Force an active tribute
+    const fakeChiefId = state.world.actors[0]?.actorId ?? 'bot:test';
+    state.world.officeTributes = [
+      {
+        tributeId: 'tribute_test_1',
+        positionId: `${locId}:missions`,
+        locationId: locId,
+        officeHolderActorId: fakeChiefId,
+        superiorActorId: 'reserved:wei_zhongxian',
+        dueCopper: 600,
+        paidCopper: 0,
+        termStartsAt: ctx.now - 1000,
+        termEndsAt: ctx.now + 6 * 24 * 60 * 60 * 1000,
+        status: 'active',
+        reviewLabel: '本期足额上缴',
+      }
+    ];
+
+    const res = await worldLocationChiefDashboardGet(ctx, { locationId: locId });
+
+    expect(res.data.activeTribute).toBeDefined();
+    expect(res.data.activeTribute!.tributeId).toBe('tribute_test_1');
+    expect(res.data.activeTribute!.dueCopper).toBe(600);
+    expect(res.data.activeTribute!.paidCopper).toBe(0);
+    expect(res.data.activeTribute!.status).toBe('active');
+  });
+});
+

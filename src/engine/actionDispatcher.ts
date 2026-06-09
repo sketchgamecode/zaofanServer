@@ -13,7 +13,7 @@ import { refreshBlackMarket, buyAndEquipItem, buyItem, sellItem } from './blackM
 import { arenaFight, arenaGetInfo, arenaRefreshCandidates, arenaSkipCooldown } from './arena.js';
 import { mailDeleteBattleReplay, mailGetBattleReplay, mailGetBattleReplays, mailSaveMissionReplay } from './mail.js';
 import { dungeonFight } from './dungeon.js';
-import { worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList, worldServicePositionGetDetail, worldServicePositionLedgerGet, worldServicePositionCandidatesGet } from './world.js';
+import { worldActorsGetOverview, worldLocationsGetStatus, worldActorGetDetail, worldServicePositionsGetList, worldServicePositionGetDetail, worldServicePositionLedgerGet, worldServicePositionCandidatesGet, worldLocationTreasuryGet, worldLocationRaidStart, worldLocationRaidSettle, worldLocationGuardJoin, worldLocationGuardLeave, worldLocationGuardClaim, worldOfficeTributeGet, worldOfficeTributePay, worldLocationFinanceReportGet, worldLocationChiefDashboardGet } from './world.js';
 
 type Handler = (ctx: ActionContext, payload: Record<string, unknown>) => Promise<ActionResponse> | ActionResponse;
 
@@ -60,6 +60,16 @@ const ACTION_HANDLERS: Record<string, Handler> = {
   'WORLD_SERVICE_POSITION_GET_DETAIL': worldServicePositionGetDetail,
   'WORLD_SERVICE_POSITION_LEDGER_GET': worldServicePositionLedgerGet,
   'WORLD_SERVICE_POSITION_CANDIDATES_GET': worldServicePositionCandidatesGet,
+  'WORLD_LOCATION_TREASURY_GET': worldLocationTreasuryGet,
+  'WORLD_LOCATION_RAID_START': worldLocationRaidStart,
+  'WORLD_LOCATION_RAID_SETTLE': worldLocationRaidSettle,
+  'WORLD_LOCATION_GUARD_JOIN': worldLocationGuardJoin,
+  'WORLD_LOCATION_GUARD_LEAVE': worldLocationGuardLeave,
+  'WORLD_LOCATION_GUARD_CLAIM': worldLocationGuardClaim,
+  'WORLD_OFFICE_TRIBUTE_GET': worldOfficeTributeGet,
+  'WORLD_OFFICE_TRIBUTE_PAY': worldOfficeTributePay,
+  'WORLD_LOCATION_FINANCE_REPORT_GET': worldLocationFinanceReportGet,
+  'WORLD_LOCATION_CHIEF_DASHBOARD_GET': worldLocationChiefDashboardGet,
 };
 
 export async function dispatchAction(

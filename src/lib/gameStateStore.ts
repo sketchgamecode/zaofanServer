@@ -51,20 +51,27 @@ export async function saveGameState(playerId: string, state: GameState, now: num
     state.player.id = playerId;
   }
 
-  const { error } = await supabaseAdmin
-    .from('player_saves')
-    .upsert(
-      {
-        player_id: playerId,
-        game_state: state,
-        save_version: CORE_SCHEMA_VERSION,
-        updated_at: new Date(now).toISOString(),
-      },
-      { onConflict: 'player_id' },
-    );
+  const originalWorld = state.world;
+  (state as any).world = { status: 'UNINITIALIZED', actors: [] };
 
-  if (error) {
-    throw new GameError('SAVE_WRITE_FAILED', `Failed to write save: ${error.message}`);
+  try {
+    const { error } = await supabaseAdmin
+      .from('player_saves')
+      .upsert(
+        {
+          player_id: playerId,
+          game_state: state,
+          save_version: CORE_SCHEMA_VERSION,
+          updated_at: new Date(now).toISOString(),
+        },
+        { onConflict: 'player_id' },
+      );
+
+    if (error) {
+      throw new GameError('SAVE_WRITE_FAILED', `Failed to write save: ${error.message}`);
+    }
+  } finally {
+    state.world = originalWorld;
   }
 
   return state;

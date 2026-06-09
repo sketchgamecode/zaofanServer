@@ -41,6 +41,7 @@ const PUBLIC_TABLES: WipeTableSpec[] = [
   { table: 'player_saves', keyColumn: 'player_id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
   { table: 'player_resources', keyColumn: 'player_id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
   { table: 'profiles', keyColumn: 'id', impossibleValue: '00000000-0000-0000-0000-000000000000' },
+  { table: 'world_state', keyColumn: 'id', impossibleValue: '__impossible_world_id__' },
 ];
 
 async function countRecords(table: string): Promise<number> {

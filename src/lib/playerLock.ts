@@ -1,4 +1,5 @@
 const playerLocks = new Map<string, Promise<void>>();
+const worldLocks = new Map<string, Promise<void>>();
 
 /**
  * Single-instance in-memory mutex.
@@ -21,6 +22,29 @@ export async function withPlayerLock<T>(playerId: string, fn: () => Promise<T>):
     release();
     if (playerLocks.get(playerId) === current) {
       playerLocks.delete(playerId);
+    }
+  }
+}
+
+/**
+ * Single-instance in-memory mutex for global world operations.
+ */
+export async function withWorldLock<T>(worldId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = worldLocks.get(worldId) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  worldLocks.set(worldId, previous.then(() => current));
+  await previous;
+
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (worldLocks.get(worldId) === current) {
+      worldLocks.delete(worldId);
     }
   }
 }

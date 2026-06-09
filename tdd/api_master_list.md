@@ -38,7 +38,7 @@
 
 ### 2.2 读取/创建存档
 *   **Endpoint**: `GET /api/save/`
-*   **说明**: 加载当前玩家的存档（GameState）。如果玩家是首次登录，将自动创建一个初始化的存档。
+*   **说明**: 加载当前玩家的存档（GameState）。如果玩家是首次登录，将自动创建一个初始化的存档。特别地，返回存档中的 `world` 字段是由服务器从全局共享的 `world_state` 表动态合并而来的，玩家个人物理存档并不包含这部分数据。
 *   **Auth**: 必须
 *   **返回示例**:
     ```json
@@ -110,8 +110,18 @@
 | `WORLD_ACTOR_GET_DETAIL` | 查询世界角色（玩家/Bot）的详细资料和任职情况 | `{"actorId": "actor_uuid"}` | `WorldActorDetailView` |
 | `WORLD_SERVICE_POSITIONS_GET_LIST` | 获取所有或指定条件的职位列表 | `{"locationId": "northern_bureau", "faction": "imperial"}` | `WorldServicePositionListItem[]` |
 | `WORLD_SERVICE_POSITION_GET_DETAIL` | 查询指定职位的详细属性、KPI、以及实控情况与候选预览 | `{"positionId": "weaving_bureau:missions"}` | `ServicePositionDetail` |
-| `WORLD_SERVICE_POSITION_LEDGER_GET` | 查询指定职位、角色或全局的收益账本流水 | `{"positionId": "weaving_bureau:missions", "actorId": "actor_uuid", "limit": 20}` | `{ entries: OfficeLedgerEntry[] }` |
+| `WORLD_SERVICE_POSITION_LEDGER_GET` | 查询指定地点、职位、角色或全局的收益账本流水 | `{"locationId": "weaving_bureau", "positionId": "weaving_bureau:missions", "actorId": "actor_uuid", "limit": 20}` | `{ entries: OfficeLedgerEntry[] }` |
 | `WORLD_SERVICE_POSITION_CANDIDATES_GET` | 查询指定职位的任免台候选人评分及诊断建议 | `{"positionId": "weaving_bureau:missions", "limit": 8}` | `OfficeCandidateListView` |
+| `WORLD_LOCATION_TREASURY_GET` | 查询指定地点的公账金钱、物资、权势及防守状态 | `{"locationId": "weaving_bureau"}` | `LocationTreasuryView` |
+| `WORLD_LOCATION_RAID_START` | 对指定地点公账发起劫掠战斗，进行防守者战斗模拟 | `{"locationId": "weaving_bureau"}` | `LocationRaidStartData` |
+| `WORLD_LOCATION_RAID_SETTLE` | 劫掠胜利后选择战利品偏向并结算 | `{"raidId": "raid_1717...", "choice": "wealth"}` | `LocationRaidSettleData` |
+| `WORLD_LOCATION_GUARD_JOIN` | 申请在指定场所值守站岗，约定值守时长与饷银 | `{"locationId": "weaving_bureau", "durationMinutes": 60}` | `LocationTreasuryView` |
+| `WORLD_LOCATION_GUARD_LEAVE` | 提前擅自离开岗位，舍弃值岗工钱奖励 | `{"dutyId": "duty_1717..."}` | `LocationTreasuryView` |
+| `WORLD_LOCATION_GUARD_CLAIM` | 值守正常结束时领取饷银（支持公账余额不足时短发） | `{"dutyId": "duty_1717..."}` | `{ dutyId: string, locationId: string, wageExpected: number, wagePaid: number, shortfall: number, treasuryAfter: LocationTreasuryView }` |
+| `WORLD_OFFICE_TRIBUTE_GET` | 查询指定地点的每周上缴期贡要求或历史记录 | `{"locationId": "weaving_bureau", "includeHistory": true}` | `{ terms: OfficeTributeTerm[] }` |
+| `WORLD_OFFICE_TRIBUTE_PAY` | 主官手动上缴期贡铜钱，等额增加上级魏忠贤皇宫公账 | `{"tributeId": "tribute_xxx", "amountCopper": 400}` | `{ term: OfficeTributeTerm, copperBefore: number, copperAfter: number }` |
+| `WORLD_LOCATION_FINANCE_REPORT_GET` | 查询指定地点近日的收支财务账本报表 | `{"locationId": "weaving_bureau", "days": 7}` | `LocationFinanceReportView` |
+| `WORLD_LOCATION_CHIEF_DASHBOARD_GET` | ????????????:????????????????????7????? | `{locationId: weaving_bureau}` | `LocationChiefDashboardView` |
 | `DEBUG_RESET_SAVE` | **(仅开发)** 重置存档 | `{}` | `{ "reset": true }` |
 
 ### 4.2 废弃动作 (Deprecated — 请勿新接)
@@ -1052,11 +1062,12 @@ curl -X POST http://localhost:3001/api/action/ \
 
 ### WORLD_SERVICE_POSITION_LEDGER_GET
 
-查询指定职位、指定角色、或全局的最近收益账本。
+查询指定地点、指定职位、指定角色、或全局的最近收益账本。
 
 **Request Payload**:
 ```typescript
 {
+  locationId?: string; // 可选，按地点 ID 过滤
   positionId?: string; // 可选，按职位 ID 过滤
   actorId?: string;    // 可选，按受益者角色 ID 过滤
   limit?: number;      // 可选，返回最大条目数，默认 20，最大 50
@@ -1092,9 +1103,271 @@ curl -X POST http://localhost:3001/api/action/ \
   positionId: string;
   incumbent: OfficeCandidateView; // 现任官员评分与诊断
   currentPlayer?: OfficeCandidateView; // 当前玩家的评分与诊断（即使落选也必定返回）
-  candidates: OfficeCandidateView[]; // 候选挑战者列表，按得分降序排序 (newest first)
-  plottingAdvice: string[]; // 面向当前玩家的 3-5 条详细图谋/谋缺中文建议
 }
 ```
 
 *Last Updated: 2026-06-01*
+
+---
+
+### WORLD_LOCATION_TREASURY_GET
+
+获取指定地点的公账余额、物资、权势值、下一次结算时间、防守守卫槽位使用情况以及基于当前坐骑和地点财务额度的提示。
+
+**Request Payload**:
+```typescript
+{
+  locationId: string; // 地点 ID，如 "weaving_bureau"
+}
+```
+
+**Response Data**:
+```typescript
+{
+  locationId: string;
+  copperBalance: number;     // 公账铜钱余额
+  goodsValue: number;        // 公账物资价值
+  powerValue: number;        // 公账权势值
+  nextDistributionAt: number;// 下一次进行收益分配的时间戳（毫秒）
+  guardSlotsUsed: number;    // 已使用的守卫槽数
+  guardSlotsMax: number;     // 最大守卫槽数 (固定为 3)
+  defenseRating: number;     // 整体防御评估得分 (由该地点职位占有者或bot的平均等级决定)
+  updatedAt: number;         // 上次公账更新时间戳
+
+  // 以下为视图派生字段
+  locationName: string;      // 地点名称
+  ownerFaction: PowerFactionId; // 控制该地点的派系 ID
+  ownerLabel: string;        // 控制派系中文名
+  raidRiskHint: string;      // 基于公账财货量的劫掠风险中文文案提示
+  carryHint: string;         // 基于玩家当前坐骑的搬运效率中文文案提示
+}
+```
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_LOCATION_RAID_START
+
+对指定地点发起一次劫掠，自动选取防守角色并运行战斗模拟器。
+
+**Request Payload**:
+```typescript
+{
+  locationId: string; // 被劫掠的地点 ID
+}
+```
+
+**Response Data**:
+```typescript
+{
+  raidId: string;            // 此次劫掠生成的唯一事务/战局 ID
+  locationId: string;        // 劫掠的地点 ID
+  locationName: string;      // 场所名称
+  defenderActor?: MissionTargetActorPreview; // 防守该公账的角色快照预览
+  battleResult: BattleResultV2; // 战斗模拟结果
+  canChooseOutcome: boolean; // 玩家是否获得胜利（若获胜则可自主选择结算，若失败则无法进入结算选择）
+  treasuryBefore: LocationTreasuryView; // 劫掠发生前的场所公账快照
+}
+```
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_LOCATION_RAID_SETTLE
+
+劫掠胜利后，玩家可以针对战利品结算做出最终选择（夺财、夺权或扬名）。
+
+**Request Payload**:
+```typescript
+{
+  raidId: string;                   // 待结算的劫掠战局 ID
+  choice: 'wealth' | 'power' | 'fame'; // 劫掠成果偏向选择
+}
+```
+
+**Response Data**:
+```typescript
+{
+  raidId: string;
+  locationId: string;
+  choice: 'wealth' | 'power' | 'fame';
+  rewardCopper: number;             // 结算给予玩家的铜钱奖励
+  rewardPower: number;              // 结算给予玩家的权柄奖励
+  rewardPrestige: number;           // 结算给予玩家的声望奖励
+  treasuryAfter: LocationTreasuryView; // 结算扣减后的场所公账最新快照
+}
+```
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_LOCATION_GUARD_JOIN
+
+当前玩家申请加入指定地点的值岗守卫。
+
+**Request Payload**:
+```typescript
+{
+  locationId: string;       // 要加入守卫值勤的地点 ID
+  durationMinutes?: number; // 预期值守的时长（clamped to 30 / 60 / 120），默认 60
+}
+```
+
+**Response Data**:
+```typescript
+LocationTreasuryView // 返回更新后的场所公账视图（包含最新的守卫列表与位置占用数）
+```
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_LOCATION_GUARD_LEAVE
+
+值岗尚未结束时，玩家可以主动擅自离岗。擅自离岗不会获得任何饷银奖励。
+
+**Request Payload**:
+```typescript
+{
+  dutyId: string; // 值岗任务的唯一 ID
+}
+```
+
+**Response Data**:
+```typescript
+LocationTreasuryView // 返回更新后的场所公账视图
+```
+
+*Last Updated: 2026-06-01*
+
+---
+
+### WORLD_LOCATION_GUARD_CLAIM
+
+值岗正常结束后（当前时间达到 endsAt 之后），玩家可以通过此 API 申请领取饷银。
+
+**Request Payload**:
+```typescript
+{
+  dutyId: string; // 已完成的值岗任务 ID
+}
+```
+
+**Response Data**:
+```typescript
+{
+  dutyId: string;
+  locationId: string;
+  wageExpected: number;             // 应发饷银总数
+  wagePaid: number;                 // 实发饷银数（若公账余额不足，则只给剩余的全部余额）
+  shortfall: number;                // 短发额度 (wageExpected - wagePaid)
+  treasuryAfter: LocationTreasuryView; // 结算扣减后的最新公账快照
+}
+```
+
+*Last Updated: 2026-06-02*
+
+---
+
+### WORLD_OFFICE_TRIBUTE_GET
+
+查询指定地点的每周上缴期贡要求或历史记录。
+
+**Request Payload**:
+```typescript
+{
+  locationId?: string;
+  positionId?: string;
+  actorId?: string;
+  includeHistory?: boolean; // 是否包含历史缴贡记录（默认只返回 active）
+}
+```
+
+**Response Data**:
+```typescript
+{
+  terms: OfficeTributeTerm[];
+}
+```
+
+*Last Updated: 2026-06-02*
+
+---
+
+### WORLD_OFFICE_TRIBUTE_PAY
+
+主官手动上缴期贡。
+
+**Request Payload**:
+```typescript
+{
+  tributeId: string;
+  amountCopper: number; // 上缴铜钱数量
+}
+```
+
+**Response Data**:
+```typescript
+{
+  term: OfficeTributeTerm;
+  copperBefore: number;
+  copperAfter: number;
+}
+```
+
+*Last Updated: 2026-06-02*
+
+---
+
+### WORLD_LOCATION_FINANCE_REPORT_GET
+
+查询指定地点近日的收支财务账本报表。
+
+**Request Payload**:
+```typescript
+{
+  locationId: string;
+  days?: number; // 聚合天数 (默认 7, 最大 30)
+}
+```
+
+**Response Data**:
+```typescript
+LocationFinanceReportView
+```
+
+*Last Updated: 2026-06-02*
+
+### WORLD_LOCATION_CHIEF_DASHBOARD_GET
+
+??????????????????,???????????
+
+**Request Payload**:
+`	ypescript
+{
+  locationId: string; // ???? ID
+}
+`
+
+**Response Data**:
+`	ypescript
+LocationChiefDashboardView
+// {
+//   locationId: string;
+//   locationName: string;
+//   chiefActor: ChiefActorView;        // ????(????????)
+//   treasury: LocationTreasuryView;    // ????(?????)
+//   activeTribute?: OfficeTributeTerm; // ????(?? active ??)
+//   topPositions: Array<...>;          // ??????(?? 5 ?)
+//   recentLedger: OfficeLedgerEntry[]; // ?? 10 ?????
+//   financeSummary: Array<{            // ? 7 ????????
+//     dayKey, netCopperDelta, incomeCopper,
+//     expenseCopper, raidLossCopper, guardWageCopper, tributePaidCopper
+//   }>;
+// }
+`
+
+*Last Updated: 2026-06-03*

@@ -6,13 +6,14 @@ import { dispatchAction } from '../engine/actionDispatcher.js';
 import { applyDailyResetIfNeeded } from '../engine/dailyReset.js';
 import { toActionErrorResponse } from '../engine/errors.js';
 import { loadOrCreateGameState, saveGameState } from '../lib/gameStateStore.js';
+import { loadOrCreateWorldState, saveWorldState } from '../lib/worldStateStore.js';
 import {
   getRequestMetadata,
   logServerEvent,
   summarizeActionPayload,
   summarizeGameState,
 } from '../lib/observability.js';
-import { withPlayerLock } from '../lib/playerLock.js';
+import { withPlayerLock, withWorldLock } from '../lib/playerLock.js';
 import { getNow } from '../lib/time.js';
 import type { GameActionEnvelope } from '../types/action.js';
 
@@ -60,56 +61,68 @@ router.post('/', requireAuth, async (req: Request, res: Response): Promise<void>
 
   try {
     const response = await withPlayerLock(userId, async () => {
-      const now = getNow();
-      const loadResult = await loadOrCreateGameState(userId, now);
-      const beforeSummary = summarizeGameState(loadResult.state, now);
-      const resetApplied = applyDailyResetIfNeeded(loadResult.state, now);
-      const ctx = createActionContext({
-        playerId: userId,
-        now,
-        state: loadResult.state,
-        dirty: loadResult.created || loadResult.resetInvalid || resetApplied,
-      });
+      return await withWorldLock('default_world', async () => {
+        const now = getNow();
+        const loadResult = await loadOrCreateGameState(userId, now);
+        const globalWorld = await loadOrCreateWorldState(now);
 
-      const result = await dispatchAction(ctx, actionEnvelope);
+        // Attach global world to the loaded player state
+        loadResult.state.world = globalWorld;
 
-      if (ctx.dirty) {
-        await saveGameState(userId, ctx.state, now);
-        if (result.ok) {
-          result.stateRevision = ctx.state.meta.stateRevision;
-        } else {
-          result.stateRevision = ctx.state.meta.stateRevision;
-        }
-      }
-
-      const afterSummary = summarizeGameState(ctx.state, now);
-      logServerEvent(
-        result.ok ? 'action_completed' : 'action_failed',
-        {
-          ...requestMeta,
+        const beforeSummary = summarizeGameState(loadResult.state, now);
+        const resetApplied = applyDailyResetIfNeeded(loadResult.state, now);
+        const ctx = createActionContext({
           playerId: userId,
-          action: actionEnvelope.action,
-          ok: result.ok,
-          errorCode: result.ok ? null : result.errorCode,
-          message: result.ok ? null : result.message,
-          durationMs: Date.now() - requestStartedAtMs,
-          payloadSummary: summarizeActionPayload(actionEnvelope.payload),
-          stateRevisionBefore: beforeSummary.stateRevision,
-          stateRevisionAfter: afterSummary.stateRevision,
-          tavernStatusBefore: beforeSummary.tavernStatus,
-          tavernStatusAfter: afterSummary.tavernStatus,
-          missionOfferCountBefore: beforeSummary.missionOfferCount,
-          missionOfferCountAfter: afterSummary.missionOfferCount,
-          activeMissionIdBefore: beforeSummary.activeMissionId,
-          activeMissionIdAfter: afterSummary.activeMissionId,
-          loadCreated: loadResult.created,
-          loadResetInvalid: loadResult.resetInvalid,
-          dailyResetApplied: resetApplied,
-        },
-        result.ok ? 'info' : 'error',
-      );
+          now,
+          state: loadResult.state,
+          dirty: loadResult.created || loadResult.resetInvalid || resetApplied,
+        });
 
-      return result;
+        const result = await dispatchAction(ctx, actionEnvelope);
+
+        // Save global world first if modified
+        if (ctx.worldDirty) {
+          await saveWorldState(ctx.state.world, now);
+        }
+
+        if (ctx.dirty) {
+          await saveGameState(userId, ctx.state, now);
+          if (result.ok) {
+            result.stateRevision = ctx.state.meta.stateRevision;
+          } else {
+            result.stateRevision = ctx.state.meta.stateRevision;
+          }
+        }
+
+        const afterSummary = summarizeGameState(ctx.state, now);
+        logServerEvent(
+          result.ok ? 'action_completed' : 'action_failed',
+          {
+            ...requestMeta,
+            playerId: userId,
+            action: actionEnvelope.action,
+            ok: result.ok,
+            errorCode: result.ok ? null : result.errorCode,
+            message: result.ok ? null : result.message,
+            durationMs: Date.now() - requestStartedAtMs,
+            payloadSummary: summarizeActionPayload(actionEnvelope.payload),
+            stateRevisionBefore: beforeSummary.stateRevision,
+            stateRevisionAfter: afterSummary.stateRevision,
+            tavernStatusBefore: beforeSummary.tavernStatus,
+            tavernStatusAfter: afterSummary.tavernStatus,
+            missionOfferCountBefore: beforeSummary.missionOfferCount,
+            missionOfferCountAfter: afterSummary.missionOfferCount,
+            activeMissionIdBefore: beforeSummary.activeMissionId,
+            activeMissionIdAfter: afterSummary.activeMissionId,
+            loadCreated: loadResult.created,
+            loadResetInvalid: loadResult.resetInvalid,
+            dailyResetApplied: resetApplied,
+          },
+          result.ok ? 'info' : 'error',
+        );
+
+        return result;
+      });
     });
 
     res.json(response);

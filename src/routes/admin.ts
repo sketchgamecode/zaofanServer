@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { loadOrCreateGameState, saveGameState } from '../lib/gameStateStore.js';
+import { loadOrCreateWorldState } from '../lib/worldStateStore.js';
 import { getNow } from '../lib/time.js';
 
 const router = Router();
@@ -36,6 +37,9 @@ router.get('/players/:id/resources', async (req: Request, res: Response): Promis
 
   try {
     const loadResult = await loadOrCreateGameState(targetPlayerId, now);
+    const globalWorld = await loadOrCreateWorldState(now);
+    loadResult.state.world = globalWorld;
+
     if (loadResult.created || loadResult.resetInvalid) {
       await saveGameState(targetPlayerId, loadResult.state, now);
     }

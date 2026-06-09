@@ -686,6 +686,7 @@ export type WorldActor = {
   actorId: string;
   kind: 'bot' | 'player';
   displayName: string;
+  title?: string;
   raceId: RaceId;
   classId: PlayerClassId;
   faction: PowerFactionId;
@@ -703,7 +704,19 @@ export type OfficeLedgerEntryType =
   | 'bot_power'
   | 'shop_tax'
   | 'stamina_tax'
-  | 'evaluation';
+  | 'evaluation'
+  | 'raid_wealth'
+  | 'raid_power'
+  | 'raid_fame'
+  | 'raid_failed'
+  | 'guard_join'
+  | 'guard_leave'
+  | 'guard_wage'
+  | 'guard_wage_shortfall'
+  | 'tribute_pay'
+  | 'tribute_passed'
+  | 'tribute_failed'
+  | 'chief_exposed_copper_change';
 
 export type OfficeLedgerEntry = {
   entryId: string;
@@ -730,9 +743,13 @@ export type WorldState = {
   botSimulation?: {
     lastSimulatedAt: number;
   };
+  locationTreasuries?: LocationTreasury[];
+  pendingRaids?: Record<string, PendingRaidState>;
+  locationGuardDuties?: LocationGuardDuty[];
+  officeTributes?: OfficeTributeTerm[];
 };
 
-export type PowerLocationService = 'missions' | 'shop' | 'dungeon' | 'arena' | 'promotion' | 'intel' | 'estate' | 'stamina' | 'office_registry' | 'appointment' | 'evaluation';
+export type PowerLocationService = 'missions' | 'shop' | 'dungeon' | 'arena' | 'promotion' | 'intel' | 'estate' | 'stamina' | 'office_registry' | 'appointment' | 'evaluation' | 'tribute_registry';
 
 export type OfficeKpiProfile = {
   termStartsAt: number;
@@ -805,6 +822,166 @@ export type ServicePositionCandidatesPreview = {
   currentPlayerRank?: number;
   topCandidate?: OfficeCandidateView;
   advice: string[];
+};
+
+export type LocationTreasury = {
+  locationId: string;
+  copperBalance: number;
+  goodsValue: number;
+  powerValue: number;
+  nextDistributionAt: number;
+  guardSlotsUsed: number;
+  guardSlotsMax: number;
+  defenseRating: number;
+  updatedAt: number;
+};
+
+export type LocationGuardDutyStatus = 'active' | 'completed' | 'abandoned';
+
+export type LocationGuardDuty = {
+  dutyId: string;
+  locationId: string;
+  actorId: string;
+  actorDisplayName: string;
+  actorAvatarId: string;
+  actorKind: 'player' | 'bot';
+  faction: PowerFactionId;
+  level: number;
+  combatRating: number;
+  startsAt: number;
+  endsAt: number;
+  wageCopper: number;
+  status: LocationGuardDutyStatus;
+};
+
+export type LocationGuardDutyView = LocationGuardDuty & {
+  remainingSeconds: number;
+  canClaimWage: boolean;
+  canLeave: boolean;
+};
+
+export type ChiefActorView = {
+  actorId: string;
+  displayName: string;
+  avatarId: string;
+  level: number;
+  faction: PowerFactionId;
+  title?: string;
+  personalCopperExposed: number;
+};
+
+export type LocationTreasuryView = LocationTreasury & {
+  locationName: string;
+  ownerFaction: PowerFactionId;
+  ownerLabel: string;
+  raidRiskHint: string;
+  carryHint: string;
+  guards: LocationGuardDutyView[];
+  guardHint: string;
+  chiefActor?: ChiefActorView;
+};
+
+export type LocationFinanceReportView = {
+  locationId: string;
+  locationName: string;
+  chiefActor: {
+    actorId: string;
+    displayName: string;
+    title?: string;
+    avatarId: string;
+  };
+  currentExposedCopper: number;
+  nextTribute?: OfficeTributeTerm;
+  dailyRows: Array<{
+    dayKey: string;
+    peakCopper: number;
+    netCopperDelta: number;
+    incomeCopper: number;
+    expenseCopper: number;
+    raidLossCopper: number;
+    guardWageCopper: number;
+    tributePaidCopper: number;
+  }>;
+};
+
+/** WORLD_LOCATION_CHIEF_DASHBOARD_GET — 场所主官管事面板聚合视图 */
+export type LocationChiefDashboardView = {
+  locationId: string;
+  locationName: string;
+  /** 当前主官信息 */
+  chiefActor: ChiefActorView;
+  /** 场所公账快照（含守卫列表） */
+  treasury: LocationTreasuryView;
+  /** 本期进贡任务（若有 active 状态） */
+  activeTribute?: OfficeTributeTerm;
+  /** 此地核心职位列表（最多 5 个主要服务职位） */
+  topPositions: Array<{
+    positionId: string;
+    title: string;
+    service: PowerLocationService;
+    status: ServicePositionStatus;
+    occupant: {
+      actorId: string;
+      kind: 'bot' | 'player';
+      displayName: string;
+      avatarId: string;
+      level: number;
+      powerShare: number;
+    };
+  }>;
+  /** 近日账本流水（最新 10 条） */
+  recentLedger: OfficeLedgerEntry[];
+  /** 近 7 日财务摘要（日粒度） */
+  financeSummary: Array<{
+    dayKey: string;
+    netCopperDelta: number;
+    incomeCopper: number;
+    expenseCopper: number;
+    raidLossCopper: number;
+    guardWageCopper: number;
+    tributePaidCopper: number;
+  }>;
+};
+
+export type OfficeTributeTerm = {
+  tributeId: string;
+  positionId: string;
+  locationId: string;
+  officeHolderActorId: string;
+  superiorActorId: string;
+  dueCopper: number;
+  paidCopper: number;
+  termStartsAt: number;
+  termEndsAt: number;
+  status: 'active' | 'passed' | 'failed';
+  reviewLabel: string;
+  lastPaidAt?: number;
+};
+
+export type PendingRaidState = {
+  raidId: string;
+  locationId: string;
+  playerWon: boolean;
+  settled: boolean;
+  createdAt: number;
+  defenderActorId: string;
+  defenderDisplayName: string;
+  treasurySnapshot: {
+    locationId: string;
+    copperBalance: number;
+    goodsValue: number;
+    powerValue: number;
+  };
+};
+
+export type LocationRaidStartData = {
+  raidId: string;
+  locationId: string;
+  locationName: string;
+  defenderActor?: MissionTargetActorPreview;
+  battleResult: BattleResultV2;
+  canChooseOutcome: boolean;
+  treasuryBefore: LocationTreasuryView;
 };
 
 export type PowerLocation = {

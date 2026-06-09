@@ -77,6 +77,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS battle_replays_owner_source_idx
   ON battle_replays (owner_player_id, context, source_id)
   WHERE source_id IS NOT NULL;
 
+-- ── 3c. world_state 表（服务器全局世界状态）────────────────────────────
+CREATE TABLE IF NOT EXISTS world_state (
+  id          TEXT PRIMARY KEY,
+  world_state JSONB NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ── 4. admin_actions 表（后台操作审计日志）──────────────────────────────────
 CREATE TABLE IF NOT EXISTS admin_actions (
   id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -97,6 +104,8 @@ ALTER TABLE player_resources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE player_saves ENABLE ROW LEVEL SECURITY;
 ALTER TABLE battle_replays ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE world_state ENABLE ROW LEVEL SECURITY;
+
 
 -- profiles：玩家可以读写自己的 profile
 CREATE POLICY "profile_self_access" ON profiles

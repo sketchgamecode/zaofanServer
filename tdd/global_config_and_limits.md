@@ -93,6 +93,8 @@
 | `botSimulationIntervalMs` | Bot 离线模拟的触发最小间隔时间（毫秒） | 600,000 ms (10分钟) |
 | `minBotSimulatedLocations` | 每次 Bot 模拟最少挑选的地点数 | 3 |
 | `maxBotSimulatedLocations` | 每次 Bot 模拟最多挑选的地点数 | 8 |
+| `defaultLedgerQueryLimit` | 收益账本查询 API 默认返回条目数 | 20 |
+| `maxLedgerQueryLimit` | 收益账本查询 API 最大返回条目数限制 | 50 |
 
 *Last Updated: 2026-06-01*
 
@@ -106,4 +108,48 @@
 | `maxCandidateLimit` | 吏部任免台候选人列表查询最大返回数量限制 | 20 |
 
 *Last Updated: 2026-06-01*
+
+---
+
+## 10. 场所公账与劫掠系统限制 (Location Treasury & Raid Limits)
+
+| 常量名 | 说明 | 数值 |
+| :--- | :--- | :--- |
+| `raidChoiceWealthDeduction` | 选择“夺财”时扣除场所公账金钱/物资的比例 | 50% |
+| `raidChoicePowerDeduction` | 选择“夺权”时扣除场所公账权势的比例 | 50% |
+| `raidChoiceFameDeduction` | 选择“扬名”时扣除场所公账物资的比例 | 30% |
+| `raidMountCarryMultiplierNone` | 徒步或未识别坐骑的物货搬运倍率 | 1.0 |
+| `raidMountCarryMultiplierDonkey` | 骑乘毛驴的物货搬运倍率 | 1.4 |
+| `raidMountCarryMultiplierHorse` | 骑乘骏马的物货搬运倍率 | 1.6 |
+| `raidMountCarryMultiplierOx` | 赶着牛车的物货搬运倍率 | 2.0 |
+
+*Last Updated: 2026-06-01*
+
+---
+
+## 11. 场所守卫值守系统限制 (Location Guard Duty Limits)
+
+| 常量名 | 说明 | 数值 |
+| :--- | :--- | :--- |
+| `guardSlotsMax` | 单个场所最大守卫值岗席位数 | 3 |
+| `guardDutyDurationTiers` | 值岗站岗时长允许的档位级别（分钟） | 30 / 60 / 120 (默认 60) |
+| `guardBaseWage30Min` | 30分钟档位值守基准铜钱饷银 | 20 |
+| `guardBaseWage60Min` | 60分钟档位值守基准铜钱饷银 | 45 |
+| `guardBaseWage120Min` | 120分钟档位值守基准铜钱饷银 | 100 |
+| `guardWageDefenseBonusRatio` | 基于场所 defenseRating 给予饷银的防务比例加成 | `Math.floor(defenseRating * 0.1)` |
+
+*Last Updated: 2026-06-01*
+
+---
+
+## 12. 主官私人公账与每周上缴限制 (Weekly Tribute Limits)
+
+| 常量名 | 说明 | 数值 |
+| :--- | :--- | :--- |
+| `dueCopperBase` | 每周上缴的基准铜钱金额 | 1000 |
+| `dueCopperLevelFactor` | 基于地点解锁等级的周贡递增乘数 | 100 |
+| `weeklyTributeRecipients` | 缴期债务的上级收款人 ID | `reserved:wei_zhongxian` |
+
+*Last Updated: 2026-06-02*
+
 

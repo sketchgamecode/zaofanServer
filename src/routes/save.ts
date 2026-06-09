@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { applyDailyResetIfNeeded } from '../engine/dailyReset.js';
 import { loadOrCreateGameState, saveGameState } from '../lib/gameStateStore.js';
+import { loadOrCreateWorldState } from '../lib/worldStateStore.js';
 import { getNow } from '../lib/time.js';
 
 const router = Router();
@@ -12,6 +13,9 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
 
   try {
     const loadResult = await loadOrCreateGameState(userId, now);
+    const globalWorld = await loadOrCreateWorldState(now);
+    loadResult.state.world = globalWorld;
+
     const resetApplied = applyDailyResetIfNeeded(loadResult.state, now);
 
     if (loadResult.created || loadResult.resetInvalid || resetApplied) {
