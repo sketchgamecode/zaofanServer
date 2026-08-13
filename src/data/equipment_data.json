@@ -1,0 +1,117 @@
+{
+  "version": "0.1",
+  "updated": "2026-08-11",
+  "comment": "装备与规则数据。所有数值经模拟器验证（sim/battle_sim.py）。服务端应加载本文件而非硬编码。",
+
+  "global_rules": {
+    "hp": 100,
+    "stamina_base": 100,
+    "attack_round_regen_half": true,
+    "regen_half_rule": "floor(regen / 2)",
+    "exposed_stamina_reset": 40,
+    "max_rounds": 300,
+    "block_base": 0.15,
+    "block_cost_formula": "floor(attacker_weapon.cost / 2) + defender.block_cost_mod",
+    "push_hit_debuff": 20,
+    "push_chance": 0.3,
+    "blunt_block_shock": 5,
+    "blunt_no_pen_shock": 8,
+    "graze_min": 1,
+    "graze_max": 3,
+    "near_miss_scale": 0.5,
+    "p_cap": 6,
+    "offhand_dmg_scale": 0.8,
+    "initiative_tiebreak": "random"
+  },
+
+  "weapon_classes": {
+    "blade":  { "fingerprint": "combo", "grip_options": ["onehand", "dual", "with_shield"] },
+    "sword":  { "fingerprint": "parry", "grip_options": ["onehand", "dual", "with_shield", "twohand"] },
+    "spear":  { "fingerprint": "repel", "grip_options": ["twohand"] },
+    "blunt":  { "fingerprint": "stun",  "grip_options": ["onehand", "with_shield", "dual(bian_only)"] },
+    "bow":    { "fingerprint": "first_strike", "grip_options": ["twohand"] },
+    "fist":   { "fingerprint": "endurance", "grip_options": [] }
+  },
+
+  "weapons": [
+    { "id": "dao_hengdao",  "name": "横刀",     "class": "blade", "dmg": 12, "interval": 1, "cost": 6, "hit": 75, "p_mod": 0, "combo": 0.20, "pierce": false },
+    { "id": "dao_huanshou", "name": "环首刀",   "class": "blade", "dmg": 13, "interval": 1, "cost": 6, "hit": 75, "p_mod": 0, "combo": 0.12, "pierce": true },
+    { "id": "dao_yanling",  "name": "雁翎刀",   "class": "blade", "dmg": 12, "interval": 1, "cost": 6, "hit": 75, "p_mod": 0, "combo": 0.25, "pierce": false },
+    { "id": "dao_liuye",    "name": "柳叶刀",   "class": "blade", "dmg": 12, "interval": 1, "cost": 6, "hit": 77, "p_mod": 0, "combo": 0.23, "pierce": false },
+    { "id": "dao_changdao", "name": "双手长刀", "class": "blade", "dmg": 20, "interval": 2, "cost": 9, "hit": 75, "p_mod": 0, "combo": 0.15, "pierce": false, "grip": "twohand", "vs_kind": "spear", "vs_hit": 15, "repel_immune_vs": "spear" },
+    { "id": "jian_danshou", "name": "单手剑",   "class": "sword", "dmg": 11, "interval": 1, "cost": 6, "hit": 75, "p_mod": 0, "parry": 0.30 },
+    { "id": "jian_shuangshou", "name": "双手剑", "class": "sword", "dmg": 19, "interval": 2, "cost": 9, "hit": 75, "p_mod": 0, "parry": 0.20, "parry_dmg_scale": 1.5, "grip": "twohand" },
+    { "id": "qiang_huaqiang", "name": "花枪",   "class": "spear", "dmg": 20, "interval": 2, "cost": 8, "hit": 80, "p_mod": 0, "repel": 0.20, "pierce": true, "grip": "twohand" },
+    { "id": "qiang_daqiang",  "name": "大枪",   "class": "spear", "dmg": 24, "interval": 2, "cost": 11, "hit": 70, "p_mod": 0, "repel": 0.30, "pierce": true, "grip": "twohand" },
+    { "id": "chui_guduo",   "name": "骨朵锤",   "class": "blunt", "dmg": 20, "interval": 2, "cost": 12, "hit": 70, "p_mod": 2, "stun": 0.25 },
+    { "id": "jian_siling",  "name": "四棱锏",   "class": "blunt", "dmg": 20, "interval": 2, "cost": 12, "hit": 70, "p_mod": 2, "stun": 0.12, "ignore_reduce": 2 },
+    { "id": "bian_tiebian", "name": "铁鞭",     "class": "blunt", "dmg": 20, "interval": 2, "cost": 12, "hit": 70, "p_mod": 2, "stun": 0.20, "dual_allowed": true },
+    { "id": "gong_mugong",  "name": "木弓",     "class": "bow",   "dmg": 36, "interval": 3, "cost": 5, "hit": 70, "p_mod": 0, "first": true, "grip": "twohand" },
+    { "id": "gong_jiaogong", "name": "角弓",    "class": "bow",   "dmg": 42, "interval": 4, "cost": 6, "hit": 72, "p_mod": 1, "first": true, "grip": "twohand", "note": "复合工艺=等阶上位" },
+    { "id": "tushou",       "name": "徒手",     "class": "fist",  "dmg": 8,  "interval": 1, "cost": 3, "hit": 68, "p_fixed": 0, "dodge_self": 15 }
+  ],
+
+  "materials": [
+    { "tier": 0, "id": "qingtong", "name": "青铜",     "dmg_scale": 0.85, "durability_scale": 0.8, "rule": "仅限短兵；硬碰硬耐久损伤x2" },
+    { "tier": 1, "id": "shengtie", "name": "生铁",     "dmg_scale": 0.9,  "dmg_scale_blunt": 1.0, "durability_scale": 0.5, "rule": "刃兵不推荐；钝器平价" },
+    { "tier": 2, "id": "shutie",   "name": "熟铁",     "dmg_scale": 0.95, "durability_scale": 1.5, "rule": "软而韧" },
+    { "tier": 3, "id": "chaogang", "name": "炒钢",     "dmg_scale": 1.0,  "durability_scale": 1.0, "rule": "基准" },
+    { "tier": 4, "id": "jinggang", "name": "精钢百炼", "dmg_scale": 1.2,  "durability_scale": 1.3, "rule": "带花纹" },
+    { "tier": 5, "id": "bintie",   "name": "镔铁",     "dmg_scale": 1.4,  "durability_scale": 1.5, "rule": "花纹刃，管制" }
+  ],
+
+  "composite_craft": { "p_mod": 1, "dmg_scale": 1.05, "min_tier": 2, "names": ["灌钢", "包钢", "夹钢"] },
+
+  "p_calculation": "P = material.tier + weapon.p_mod + composite.p_mod (cap 6); fist P=0; arrow_pierce +1",
+
+  "shaft_materials": [
+    { "id": "zamu",   "name": "杂木杨木", "hit_mod": -3, "cost_mod": 0,  "durability_scale": 0.8 },
+    { "id": "zaomu",  "name": "枣木黄杨", "hit_mod": 0,  "cost_mod": 0,  "durability_scale": 1.0 },
+    { "id": "baila",  "name": "白蜡杆",   "hit_mod": 2,  "cost_mod": -1, "durability_scale": 1.2 },
+    { "id": "jizhu",  "name": "积竹木柲", "hit_mod": 4,  "cost_mod": -2, "durability_scale": 1.5 }
+  ],
+
+  "armors": [
+    { "id": "buyi",     "name": "布衣麻衣", "a": 0, "reduce": 0, "stamina": 100, "dodge": 0,  "regen": 5, "durability": 0,   "repair_decay": 0 },
+    { "id": "tengjia",  "name": "藤甲",     "a": 1, "reduce": 1, "stamina": 95,  "dodge": 2,  "regen": 4, "durability": 40,  "repair_decay": 0.20, "trait": "fire_weak(二期)" },
+    { "id": "pijia",    "name": "皮甲",     "a": 1, "reduce": 1, "stamina": 95,  "dodge": 2,  "regen": 4, "durability": 50,  "repair_decay": 0.18 },
+    { "id": "zhijia",   "name": "纸甲",     "a": 2, "reduce": 2, "stamina": 92,  "dodge": 4,  "regen": 4, "durability": 50,  "repair_decay": 0.15, "trait": "arrow_reduce_3" },
+    { "id": "mianjia",  "name": "棉甲",     "a": 2, "reduce": 2, "stamina": 92,  "dodge": 4,  "regen": 4, "durability": 60,  "repair_decay": 0.15 },
+    { "id": "zhajia",   "name": "铁札甲",   "a": 3, "reduce": 3, "stamina": 88,  "dodge": 7,  "regen": 4, "durability": 70,  "repair_decay": 0.12 },
+    { "id": "liangdang","name": "两当铠",   "a": 3, "reduce": 3, "stamina": 91,  "dodge": 7,  "regen": 4, "durability": 65,  "repair_decay": 0.12, "trait": "light_iron" },
+    { "id": "mingguang","name": "明光铠",   "a": 4, "reduce": 4, "stamina": 82,  "dodge": 10, "regen": 3, "durability": 90,  "repair_decay": 0.10, "trait": "mirror_0.25" },
+    { "id": "shanwen",  "name": "山文甲",   "a": 4, "reduce": 4, "stamina": 82,  "dodge": 10, "regen": 3, "durability": 100, "repair_decay": 0.08 },
+    { "id": "burenjia", "name": "步人甲",   "a": 4, "reduce": 5, "stamina": 78,  "dodge": 12, "regen": 3, "durability": 100, "repair_decay": 0.10, "trait": "max_reduce" },
+    { "id": "suozi",    "name": "锁子甲",   "a": 5, "reduce": 5, "stamina": 86,  "dodge": 5,  "regen": 4, "durability": 80,  "repair_decay": 0.04, "trait": "easy_repair" }
+  ],
+
+  "armor_material_upgrades": [
+    { "id": "jinggang", "name": "精钢",     "reduce_mod": 1, "durability_mod": 15, "repair_decay_mod": -0.02 },
+    { "id": "bailian",  "name": "百炼精钢", "reduce_mod": 2, "durability_mod": 30, "repair_decay_mod": -0.04 },
+    { "id": "bintie",   "name": "镔铁",     "reduce_mod": 3, "durability_mod": 45, "repair_decay_mod": -0.06, "floor": 0.04 }
+  ],
+
+  "shields": [
+    { "id": "tengpai", "name": "藤牌", "block_mod": 0.25, "block_cost_mod": -1, "dodge_mod": 0 },
+    { "id": "pangpai", "name": "旁牌", "block_mod": 0.35, "block_cost_mod": 1,  "dodge_mod": -3 }
+  ],
+
+  "arrows": [
+    { "id": "normal",  "name": "普通箭", "p_mod": 0, "dmg_scale": 1.0, "hit_mod": 0 },
+    { "id": "pierce",  "name": "穿甲箭", "p_mod": 1, "dmg_scale": 0.9, "hit_mod": 0 },
+    { "id": "heavy",   "name": "重箭",   "p_mod": 0, "dmg_scale": 1.15, "hit_mod": -5 }
+  ],
+
+  "legendary_rules": {
+    "p": 6,
+    "dmg_scale_vs_t4": [1.2, 1.4],
+    "exclusive_trait": "一件名器一条文化词条",
+    "examples": [
+      { "name": "宿铁刀", "class": "blade", "trait": "斩甲: 对A>=4目标伤害x1.2" },
+      { "name": "大夏龙雀", "class": "blade", "trait": "龙雀: 连击率35%" },
+      { "name": "青龙偃月", "class": "blade(长刀)", "trait": "威压: 首回合对方命中-10" },
+      { "name": "尉迟钢鞭", "class": "blunt(鞭)", "trait": "双鞭: 双持时震慑15%" },
+      { "name": "震天弓", "class": "bow", "trait": "贯日: 射击回合必中" }
+    ]
+  }
+}

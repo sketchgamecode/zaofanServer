@@ -1,5 +1,4 @@
 import { MAX_LEVEL, XP_TABLE } from '../data/xpTable.js';
-import { getGameDateString } from '../lib/time.js';
 import type {
   BaseAttributeValues,
   BattleResultV2,
@@ -8,9 +7,16 @@ import type {
   PlayerClassId,
   PlayerCombatSnapshot,
   EnemySnapshot,
+  BattleSide,
 } from '../types/gameState.js';
 import { CLASS_CONFIG } from './combatConfig.js';
 import { simulateBattleV2 } from './combatSimulator.js';
+import {
+  getWeaponFinal,
+  getArmorFinal,
+  getShieldFinal,
+  shields,
+} from '../lib/equipmentData.js';
 
 export { CLASS_CONFIG } from './combatConfig.js';
 
@@ -54,29 +60,14 @@ export function getTotalAttributes(state: GameState): BaseAttributeValues {
 
   for (const item of Object.values(state.equipment.equipped)) {
     if (!item) continue;
-    total.strength += item.bonusAttributes.strength ?? 0;
-    total.intelligence += item.bonusAttributes.intelligence ?? 0;
-    total.agility += item.bonusAttributes.agility ?? 0;
-    total.constitution += item.bonusAttributes.constitution ?? 0;
-    total.luck += item.bonusAttributes.luck ?? 0;
+    total.strength += item.bonusAttributes?.strength ?? 0;
+    total.intelligence += item.bonusAttributes?.intelligence ?? 0;
+    total.agility += item.bonusAttributes?.agility ?? 0;
+    total.constitution += item.bonusAttributes?.constitution ?? 0;
+    total.luck += item.bonusAttributes?.luck ?? 0;
   }
 
   return total;
-}
-
-export function getTodayCN(): string {
-  return getGameDateString(Date.now());
-}
-
-export interface BattleSide {
-  hp: number;
-  damageMin: number;
-  damageMax: number;
-  critChanceBp: number;
-  dodgeChanceBp?: number;
-  blockChanceBp?: number;
-  armor: number;
-  level: number;
 }
 
 export function serverSimulateBattle(input: {
@@ -89,32 +80,73 @@ export function serverSimulateBattle(input: {
     enemy: input.enemy,
     seed: input.seed,
     context: 'MISSION',
-    firstAttacker: 'player',
   });
 }
 
 function getWeaponAverageDamage(item: EquipmentItem | null, level: number): number {
-  if (!item?.weaponDamage) return level * 3;
-  return (item.weaponDamage.min + item.weaponDamage.max) / 2;
+  if (!item) return level * 3;
+  if (item.weaponDamage) return (item.weaponDamage.min + item.weaponDamage.max) / 2;
+  return level * 3;
 }
 
 export function buildPlayerBattleSide(state: GameState): BattleSide {
-  const attrs = getTotalAttributes(state);
-  const classConf = CLASS_CONFIG[state.player.classId];
-  const mainAttr = attrs[classConf.mainStat];
-  const totalArmor = Object.values(state.equipment.equipped).reduce((sum, item) => sum + (item?.armor ?? 0), 0);
-  const weaponAverageDamage = getWeaponAverageDamage(state.equipment.equipped.weapon, state.player.level);
-  const damageMin = Math.max(1, Math.floor(weaponAverageDamage * 0.8 * classConf.weaponFactor * (1 + mainAttr / 10)));
-  const damageMax = Math.max(damageMin + 1, Math.floor(weaponAverageDamage * 1.2 * classConf.weaponFactor * (1 + mainAttr / 10)));
+  const weapon = state.equipment.equipped.weapon;
+  const body = state.equipment.equipped.body;
+  const offHand = state.equipment.equipped.offHand;
+
+  let dmg = 12; // 默认横刀/拳头基准
+  let blockBp = 1500; // 基础 15%
+  let dodgeBp = 0;
+  let armorValue = 0;
+  let hp = 100;
+
+  if (weapon) {
+    try {
+      const finalW = getWeaponFinal(weapon.itemId!, weapon.material!, weapon.craft, weapon.shaft, weapon.arrow);
+      dmg = finalW.dmg;
+    } catch (e) {
+      // 降级使用武器本身的数据
+      dmg = getWeaponAverageDamage(weapon, state.player.level);
+    }
+  } else {
+    dmg = 8; // 徒手
+  }
+
+  if (body) {
+    try {
+      const finalA = getArmorFinal(body.itemId!, body.upgrade);
+      armorValue = finalA.reduce;
+      dodgeBp = finalA.dodge * 100;
+      hp = finalA.stamina;
+    } catch (e) {
+      armorValue = body.armor ?? 0;
+      hp = 100;
+    }
+  }
+
+  if (offHand) {
+    try {
+      const isShield = shields.some((s) => s.id === offHand.itemId);
+      if (isShield) {
+        const finalS = getShieldFinal(offHand.itemId!);
+        blockBp += finalS.blockMod * 10000;
+        dodgeBp += finalS.dodgeMod * 100;
+      } else {
+        blockBp = 0; // 双持没有格挡
+      }
+    } catch (e) {
+      // 降级使用防具/副手
+    }
+  }
 
   return {
-    hp: MathCore.getMaxHP(attrs.constitution, state.player.level, state.player.classId),
-    damageMin,
-    damageMax,
-    critChanceBp: Math.floor(MathCore.getCritChance(attrs.luck, state.player.level) * 10000),
-    dodgeChanceBp: classConf.dodgeChanceBp || undefined,
-    blockChanceBp: classConf.blockChanceBp || undefined,
-    armor: totalArmor,
+    hp,
+    damageMin: dmg,
+    damageMax: dmg,
+    critChanceBp: 0,
+    dodgeChanceBp: Math.max(0, dodgeBp),
+    blockChanceBp: blockBp,
+    armor: armorValue,
     level: state.player.level,
   };
 }

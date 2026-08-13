@@ -4,7 +4,7 @@ import type { CombatantSnapshot, PowerFactionId, PowerTransferResult } from '../
 import type { ActionContext } from './actionContext.js';
 import { buildBattleReplayRecord } from './battleReplayRecords.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
-import { simulateBattleV2 } from './combatSimulator.js';
+import { simulateBattleV2, getFallbackLoadout } from './combatSimulator.js';
 import { GameError } from './errors.js';
 import { grantExp, grantResource } from './resourceService.js';
 import { applyWorldPowerTransfer } from './world.js';
@@ -99,6 +99,7 @@ export async function dungeonFight(ctx: ActionContext, payload: Record<string, u
       min: Math.max(1, Math.floor(boss.weaponDamage * 0.8)),
       max: Math.max(2, Math.floor(boss.weaponDamage * 1.2)),
     },
+    loadout: getFallbackLoadout(boss.class, boss.level),
   };
   const battleResult = simulateBattleV2({
     player,

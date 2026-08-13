@@ -4,6 +4,7 @@ import type {
   EquipmentState,
   GameState,
   PlayerCombatSnapshot,
+  CombatLoadout,
 } from '../types/gameState.js';
 import { buildPlayerBattleSide, getTotalAttributes } from './mathCore.js';
 
@@ -11,7 +12,6 @@ function getWeaponAverageDamage(item: EquipmentItem | null, level: number): numb
   if (!item?.weaponDamage) {
     return level * 3;
   }
-
   return (item.weaponDamage.min + item.weaponDamage.max) / 2;
 }
 
@@ -20,7 +20,7 @@ function getEquipmentSummary(equipped: EquipmentState['equipped'], level: number
   const offHand = equipped.offHand;
   const itemPowerTotal = Object.values(equipped).reduce((sum, item) => {
     if (!item) return sum;
-    const statPower = Object.values(item.bonusAttributes).reduce((acc, value) => acc + (value ?? 0), 0);
+    const statPower = Object.values(item.bonusAttributes || {}).reduce((acc, value) => acc + (value ?? 0), 0);
     const weaponPower = item.weaponDamage ? item.weaponDamage.min + item.weaponDamage.max : 0;
     return sum + (item.armor ?? 0) + statPower + weaponPower;
   }, 0);
@@ -37,6 +37,13 @@ export function buildPlayerCombatSnapshot(state: GameState): PlayerCombatSnapsho
   const attrs = getTotalAttributes(state);
   const battleSide = buildPlayerBattleSide(state);
   const equipmentSummary = getEquipmentSummary(state.equipment.equipped, state.player.level);
+
+  const loadout: CombatLoadout = {
+    weapon: state.equipment.equipped.weapon,
+    offHand: state.equipment.equipped.offHand,
+    body: state.equipment.equipped.body,
+    arrow: state.equipment.equipped.weapon?.arrow ?? 'normal',
+  };
 
   return {
     playerId: state.player.id,
@@ -65,6 +72,7 @@ export function buildPlayerCombatSnapshot(state: GameState): PlayerCombatSnapsho
       offHandId: equipmentSummary.offHandId,
       itemPowerTotal: equipmentSummary.itemPowerTotal,
     },
+    loadout,
   };
 }
 
@@ -73,13 +81,12 @@ export function buildCombatPreview(state: GameState): CombatPreviewView {
   const stats = snapshot.combatStats;
   const itemPowerTotal = snapshot.equipmentSummary.itemPowerTotal;
   const combatRating = Math.floor(
-    stats.hp * 0.12
-      + stats.armor * 1.5
-      + stats.damageMin * 6
-      + stats.damageMax * 6
-      + stats.critChanceBp * 0.02
-      + (stats.dodgeChanceBp ?? 0) * 0.02
-      + itemPowerTotal * 0.35,
+    stats.hp * 1.5
+      + stats.armor * 10
+      + stats.damageMin * 8
+      + (stats.blockChanceBp ?? 0) * 0.05
+      + (stats.dodgeChanceBp ?? 0) * 0.05
+      + itemPowerTotal * 0.2
   );
 
   return {

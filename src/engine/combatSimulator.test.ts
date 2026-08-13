@@ -1,84 +1,160 @@
 import { describe, expect, it } from 'vitest';
-import type { CombatantSnapshot } from '../types/gameState.js';
+import type { CombatantSnapshot, CombatantSnapshotLoadout } from '../types/gameState.js';
 import { simulateBattleV2 } from './combatSimulator.js';
 
-function fighter(id: string, classId: CombatantSnapshot['classId'], overrides: Partial<CombatantSnapshot> = {}): CombatantSnapshot {
+function fighter(
+  id: string,
+  classId: CombatantSnapshot['classId'],
+  loadout: CombatantSnapshotLoadout
+): CombatantSnapshot {
   return {
     id,
     displayName: id,
     level: 10,
     classId,
-    attributes: { strength: 30, intelligence: 30, agility: 30, constitution: 60, luck: 20 },
-    armor: 100,
-    weaponDamage: { min: 8, max: 12 },
-    ...overrides,
+    attributes: { strength: 10, intelligence: 10, agility: 10, constitution: 10, luck: 10 },
+    armor: 1,
+    weaponDamage: { min: 5, max: 10 },
+    loadout,
   };
 }
 
-describe('combatSimulator', () => {
+describe('combatSimulator Sancai V1', () => {
   it('is deterministic for the same seed and snapshots', () => {
-    const input = {
-      player: fighter('p', 'CLASS_A'),
-      enemy: fighter('e', 'CLASS_B'),
-      seed: 'same-seed',
-      context: 'MISSION' as const,
-      firstAttacker: 'player' as const,
+    const w = {
+      id: 'eq_w',
+      name: '横刀',
+      description: '横刀',
+      slot: 'weapon' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'dao_hengdao',
+      material: 'chaogang',
     };
-    expect(simulateBattleV2(input)).toEqual(simulateBattleV2(input));
+    const b = {
+      id: 'eq_b',
+      name: '皮甲',
+      description: '皮甲',
+      slot: 'body' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'pijia',
+      upgrade: null,
+    };
+    
+    const loadout: CombatantSnapshotLoadout = {
+      weapon: w,
+      offHand: null,
+      body: b,
+    };
+
+    const input = {
+      player: fighter('player', 'CLASS_A', loadout),
+      enemy: fighter('enemy', 'CLASS_E', loadout),
+      seed: 'sancai-deterministic-seed',
+      context: 'MISSION' as const,
+    };
+
+    const res1 = simulateBattleV2(input);
+    const res2 = simulateBattleV2(input);
+
+    expect(res1.winner).toBe(res2.winner);
+    expect(res1.totalRounds).toBe(res2.totalRounds);
+    expect(res1.actions).toEqual(res2.actions);
   });
 
-  it('CLASS_C bypasses armor and cannot be blocked or dodged', () => {
-    const result = simulateBattleV2({
-      player: fighter('mage', 'CLASS_C'),
-      enemy: fighter('defender', 'CLASS_A', { armor: 9999 }),
-      seed: 'class-c',
-      context: 'MISSION',
-      firstAttacker: 'player',
-    });
-    const playerHits = result.actions.flatMap((a) => a.hits).filter((h) => h.attacker === 'player');
-    expect(playerHits.length).toBeGreaterThan(0);
-    expect(playerHits.every((h) => h.armorReductionBp === 0 && !h.wasBlocked && !h.wasDodged)).toBe(true);
+  it('triggers blunt shock damage when blocked or not penetrating', () => {
+    const chui = {
+      id: 'eq_chui',
+      name: '骨朵锤',
+      description: '锤',
+      slot: 'weapon' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'chui_guduo',
+      material: 'chaogang',
+    };
+    const zhajia = {
+      id: 'eq_zhajia',
+      name: '铁札甲',
+      description: '札甲',
+      slot: 'body' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'zhajia',
+      upgrade: null,
+    };
+
+    const loadoutA: CombatantSnapshotLoadout = { weapon: chui, offHand: null, body: zhajia };
+    const loadoutB: CombatantSnapshotLoadout = { weapon: chui, offHand: null, body: zhajia };
+
+    let hasBluntShock = false;
+    for (let i = 0; i < 50; i++) {
+      const result = simulateBattleV2({
+        player: fighter('hammer', 'CLASS_E', loadoutA),
+        enemy: fighter('shield_wall', 'CLASS_A', loadoutB),
+        seed: `blunt-test-${i}`,
+        context: 'MISSION',
+      });
+      const hits = result.actions.flatMap((a) => a.hits);
+      const hasBlockedShock = hits.some((h) => h.sancaiOutcome === 'blocked' && h.damage === 5);
+      const hasShockNoPen = hits.some((h) => h.sancaiOutcome === 'shock' && h.damage === 8);
+      if (hasBlockedShock || hasShockNoPen) {
+        hasBluntShock = true;
+        break;
+      }
+    }
+
+    expect(hasBluntShock).toBe(true);
   });
 
-  it('CLASS_A block and CLASS_B dodge events can appear', () => {
-    const blocked = simulateBattleV2({
-      player: fighter('attacker', 'CLASS_A', { attributes: { strength: 10, intelligence: 10, agility: 10, constitution: 300, luck: 1 }, weaponDamage: { min: 1, max: 1 } }),
-      enemy: fighter('blocker', 'CLASS_A', { attributes: { strength: 10, intelligence: 10, agility: 10, constitution: 300, luck: 1 }, weaponDamage: { min: 1, max: 1 } }),
-      seed: 'blocks-show-up',
-      context: 'MISSION',
-      firstAttacker: 'player',
-    });
-    const dodged = simulateBattleV2({
-      player: fighter('attacker', 'CLASS_A', { attributes: { strength: 10, intelligence: 10, agility: 10, constitution: 300, luck: 1 }, weaponDamage: { min: 1, max: 1 } }),
-      enemy: fighter('dodger', 'CLASS_B', { attributes: { strength: 10, intelligence: 10, agility: 10, constitution: 300, luck: 1 }, weaponDamage: { min: 1, max: 1 } }),
-      seed: 'dodges-show-up',
-      context: 'MISSION',
-      firstAttacker: 'player',
-    });
-    expect(blocked.actions.flatMap((a) => a.hits).some((h) => h.wasBlocked)).toBe(true);
-    expect(dodged.actions.flatMap((a) => a.hits).some((h) => h.wasDodged)).toBe(true);
-  });
+  it('bypasses / deflects stab arrow when mirror armor is equipped', () => {
+    // 花枪 (spear, pierce: true) vs 明光铠 (mirror_0.25)
+    const spear = {
+      id: 'eq_spear',
+      name: '花枪',
+      description: '枪',
+      slot: 'weapon' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'qiang_huaqiang',
+      material: 'chaogang',
+    };
+    const mingguang = {
+      id: 'eq_mingguang',
+      name: '明光铠',
+      description: '明光铠',
+      slot: 'body' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'mingguang',
+      upgrade: null,
+    };
 
-  it('CLASS_D actions have two hits', () => {
-    const result = simulateBattleV2({
-      player: fighter('assassin', 'CLASS_D'),
-      enemy: fighter('target', 'CLASS_A'),
-      seed: 'dual-hit',
-      context: 'MISSION',
-      firstAttacker: 'player',
-    });
-    expect(result.actions.find((a) => a.attacker === 'player')?.hits).toHaveLength(2);
-  });
+    const loadoutPlayer: CombatantSnapshotLoadout = { weapon: spear, offHand: null, body: mingguang };
+    const loadoutEnemy: CombatantSnapshotLoadout = { weapon: spear, offHand: null, body: mingguang };
 
-  it('CLASS_E frenzy never exceeds 15 hits per action', () => {
-    const result = simulateBattleV2({
-      player: fighter('berserker', 'CLASS_E', { attributes: { strength: 5, intelligence: 5, agility: 5, constitution: 500, luck: 1 }, weaponDamage: { min: 1, max: 1 } }),
-      enemy: fighter('target', 'CLASS_A', { attributes: { strength: 5, intelligence: 5, agility: 5, constitution: 500, luck: 1 }, weaponDamage: { min: 1, max: 1 } }),
-      seed: 'frenzy-cap',
-      context: 'MISSION',
-      firstAttacker: 'player',
-    });
-    const maxHits = Math.max(...result.actions.filter((a) => a.attacker === 'player').map((a) => a.hits.length));
-    expect(maxHits).toBeLessThanOrEqual(15);
+    let hasMirrorDeflect = false;
+    for (let i = 0; i < 50; i++) {
+      const result = simulateBattleV2({
+        player: fighter('spearman', 'CLASS_B', loadoutPlayer),
+        enemy: fighter('knight', 'CLASS_A', loadoutEnemy),
+        seed: `mirror-test-${i}`,
+        context: 'MISSION',
+      });
+      const hits = result.actions.flatMap((a) => a.hits);
+      if (hits.some((h) => h.sancaiOutcome === 'mirror')) {
+        hasMirrorDeflect = true;
+        break;
+      }
+    }
+
+    expect(hasMirrorDeflect).toBe(true);
   });
 });

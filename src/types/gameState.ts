@@ -18,16 +18,9 @@ export type PowerFactionId =
   | 'underworld';
 
 export type EquipmentSlot =
-  | 'head'
-  | 'body'
-  | 'hands'
-  | 'feet'
-  | 'neck'
-  | 'belt'
-  | 'ring'
-  | 'trinket'
   | 'weapon'
-  | 'offHand';
+  | 'offHand'
+  | 'body';
 
 export type ItemRarity = 0 | 1 | 2 | 3 | 4;
 export type AttributeKey = 'strength' | 'intelligence' | 'agility' | 'constitution' | 'luck';
@@ -69,6 +62,13 @@ export type EquipmentItem = {
   price?: number;
   sellPrice: number;
   bonusAttributes: Partial<BaseAttributeValues>;
+  // Sancai system properties
+  itemId?: string;
+  material?: string;
+  craft?: string | null;
+  shaft?: string | null;
+  upgrade?: string | null;
+  arrow?: string | null;
 };
 
 export type MetaState = {
@@ -227,6 +227,13 @@ export type MountSnapshot = {
   capturedAt: number;
 };
 
+export type CombatLoadout = {
+  weapon: EquipmentItem | null;
+  offHand: EquipmentItem | null;
+  body: EquipmentItem | null;
+  arrow?: string;
+};
+
 export type PlayerCombatSnapshot = {
   playerId?: string;
   displayName?: string;
@@ -248,6 +255,7 @@ export type PlayerCombatSnapshot = {
     offHandId?: string;
     itemPowerTotal: number;
   };
+  loadout?: CombatLoadout;
 };
 
 export type EnemySnapshot = {
@@ -266,6 +274,7 @@ export type EnemySnapshot = {
     dodgeChanceBp?: number;
   };
   enemyPowerRatioBp: number;
+  loadout?: CombatLoadout;
 };
 
 export type BattleContext =
@@ -292,6 +301,14 @@ export type CombatantSnapshot = {
     offHandId?: string;
     itemPowerTotal: number;
   };
+  loadout?: CombatantSnapshotLoadout;
+};
+
+export type CombatantSnapshotLoadout = {
+  weapon: EquipmentItem | null;
+  offHand: EquipmentItem | null;
+  body: EquipmentItem | null;
+  arrow?: string;
 };
 
 export type DungeonKey = {
@@ -648,6 +665,7 @@ export type ArenaOpponentPreview = {
     blockChanceBp?: number;
     dodgeChanceBp?: number;
   };
+  loadout?: CombatLoadout;
 };
 
 export type BattleReplayRecord = {
@@ -1118,14 +1136,7 @@ export type GameState = {
 };
 
 export function isEquipmentSlot(value: unknown): value is EquipmentSlot {
-  return value === 'head'
-    || value === 'body'
-    || value === 'hands'
-    || value === 'feet'
-    || value === 'neck'
-    || value === 'belt'
-    || value === 'ring'
-    || value === 'trinket'
+  return value === 'body'
     || value === 'weapon'
     || value === 'offHand';
 }

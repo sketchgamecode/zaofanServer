@@ -8,26 +8,28 @@ import {
 import { CLASSIC_TAVERN_RULES } from '../config/classicTavernRules.js';
 import { getGameDateString } from '../lib/time.js';
 import type { EquipmentState, GameState } from '../types/gameState.js';
+import { generateEquipment } from './equipmentGenerator.js';
 
 function createEmptyEquipment(): EquipmentState {
   return {
     equipped: {
-      head: null,
-      body: null,
-      hands: null,
-      feet: null,
-      neck: null,
-      belt: null,
-      ring: null,
-      trinket: null,
       weapon: null,
       offHand: null,
+      body: null,
     },
   };
 }
 
 export function createInitialGameState(input: { now: number; playerId?: string }): GameState {
   const today = getGameDateString(input.now);
+
+  // 初始赠送低级武器各一把
+  const startingWeapons = [
+    generateEquipment({ playerLevel: 1, forcedItemId: 'dao_hengdao', rarity: 0 }),
+    generateEquipment({ playerLevel: 1, forcedItemId: 'jian_danshou', rarity: 0 }),
+    generateEquipment({ playerLevel: 1, forcedItemId: 'bian_tiebian', rarity: 0 }),
+    generateEquipment({ playerLevel: 1, forcedItemId: 'gong_mugong', rarity: 0 }),
+  ];
 
   return {
     meta: {
@@ -45,13 +47,17 @@ export function createInitialGameState(input: { now: number; playerId?: string }
       raceId: 'RACE_01',
       status: 'PENDING_CREATION',
     },
-    resources: { ...INITIAL_RESOURCES },
+    resources: {
+      ...INITIAL_RESOURCES,
+      copper: (INITIAL_RESOURCES.copper ?? 0) + 5000,
+      tokens: (INITIAL_RESOURCES.tokens ?? 0) + 10,
+    },
     attributes: {
       ...INITIAL_ATTRIBUTES,
       bought: { ...INITIAL_ATTRIBUTES.bought },
     },
     inventory: {
-      items: [],
+      items: startingWeapons,
       capacity: 60,
     },
     equipment: createEmptyEquipment(),

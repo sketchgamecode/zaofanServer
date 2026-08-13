@@ -4,6 +4,7 @@ import { buildCharacterInfoView } from './character.js';
 import { GameError } from './errors.js';
 import type { CharacterInfoView, EquipItemPayload, UnequipItemPayload } from '../types/gameState.js';
 import { isEquipmentSlot } from '../types/gameState.js';
+import { baseWeapons } from '../lib/equipmentData.js';
 
 function buildInventoryResponse(
   action: 'EQUIP_ITEM' | 'UNEQUIP_ITEM',
@@ -16,6 +17,12 @@ function buildInventoryResponse(
     stateRevision: ctx.state.meta.stateRevision,
     data: buildCharacterInfoView(ctx.state),
   };
+}
+
+function isTwoHanded(itemId: string | undefined): boolean {
+  if (!itemId) return false;
+  const base = baseWeapons.find((w) => w.id === itemId);
+  return base?.grip === 'twohand';
 }
 
 export function equipItem(
@@ -33,12 +40,26 @@ export function equipItem(
     throw new GameError('ITEM_NOT_FOUND', 'Item not found in inventory.');
   }
 
-  const item = inventoryItems[itemIndex];
+  const item = inventoryItems[itemIndex]!;
   if (!isEquipmentSlot(item.slot)) {
     throw new GameError('INVALID_EQUIPMENT_SLOT', `Invalid equipment slot: ${String(item.slot)}`);
   }
 
   const targetSlot = item.slot;
+
+  // 双手武器与副手装备冲突冲突验证
+  if (targetSlot === 'weapon' && isTwoHanded(item.itemId)) {
+    if (ctx.state.equipment.equipped.offHand) {
+      throw new GameError('INVALID_EQUIPMENT_SLOT', '双手武器无法与副手装备或盾牌同时穿戴，请先卸下副手。');
+    }
+  }
+  if (targetSlot === 'offHand') {
+    const equippedWeapon = ctx.state.equipment.equipped.weapon;
+    if (equippedWeapon && isTwoHanded(equippedWeapon.itemId)) {
+      throw new GameError('INVALID_EQUIPMENT_SLOT', '已穿戴双手武器，无法再装备副手。');
+    }
+  }
+
   const currentlyEquipped = ctx.state.equipment.equipped[targetSlot];
   const nextInventory = inventoryItems.filter((_, index) => index !== itemIndex);
   if (currentlyEquipped) {

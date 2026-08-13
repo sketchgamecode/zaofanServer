@@ -10,7 +10,19 @@ const router = Router();
 router.get('/config', (req, res) => {
   res.json({
     ok: true,
-    config: serverGlobalConfig,
+    config: {
+      ...serverGlobalConfig,
+      initialPlayerState: {
+        copper: 5000,
+        tokens: 10,
+        startingWeapons: [
+          { itemId: 'dao_hengdao', name: '凡级横刀' },
+          { itemId: 'jian_danshou', name: '凡级单手剑' },
+          { itemId: 'bian_tiebian', name: '凡级铁鞭' },
+          { itemId: 'gong_mugong', name: '凡级木弓' },
+        ],
+      },
+    },
   });
 });
 
@@ -33,7 +45,19 @@ router.post('/config', (req, res) => {
 
   res.json({
     ok: true,
-    config: serverGlobalConfig,
+    config: {
+      ...serverGlobalConfig,
+      initialPlayerState: {
+        copper: 5000,
+        tokens: 10,
+        startingWeapons: [
+          { itemId: 'dao_hengdao', name: '凡级横刀' },
+          { itemId: 'jian_danshou', name: '凡级单手剑' },
+          { itemId: 'bian_tiebian', name: '凡级铁鞭' },
+          { itemId: 'gong_mugong', name: '凡级木弓' },
+        ],
+      },
+    },
   });
 });
 

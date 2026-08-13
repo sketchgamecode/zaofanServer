@@ -5,11 +5,12 @@ import type { ActionContext } from './actionContext.js';
 import { buildBattleReplayRecord } from './battleReplayRecords.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
 import { CLASS_CONFIG } from './combatConfig.js';
-import { simulateBattleV2 } from './combatSimulator.js';
+import { simulateBattleV2, getFallbackLoadout } from './combatSimulator.js';
 import { GameError } from './errors.js';
 import { MathCore } from './mathCore.js';
 import { grantExp, grantResource, spendResource } from './resourceService.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
+import { getWeaponFinal, getArmorFinal, getShieldFinal, shields } from '../lib/equipmentData.js';
 
 const ARENA_COOLDOWN_MS = 10 * 60 * 1000;
 
@@ -41,11 +42,38 @@ function buildBotCandidate(state: GameState, seed: string, index: number): Arena
     luck: Math.floor(base * 0.45),
   };
   attributes[mainStat] = Math.floor(base * 1.25);
-  const armor = Math.max(0, level * rng.int(8, 14));
-  const weaponMin = Math.max(1, Math.floor(level * 2.2));
-  const weaponMax = Math.max(weaponMin + 1, Math.floor(level * 3.8));
-  const hp = MathCore.getMaxHP(attributes.constitution, level, classId);
+
   const honor = Math.max(0, (state.arena.honor ?? 1000) + rng.int(-180, 220));
+
+  // 为 Bot 候选人自动装备符合其等级与职业的 Sancai 武器
+  const loadout = getFallbackLoadout(classId, level);
+
+  let dmg = 12;
+  let blockBp = 1500;
+  let dodgeBp = 0;
+  let armorValue = 0;
+  let hp = 100;
+
+  if (loadout.weapon) {
+    const finalW = getWeaponFinal(loadout.weapon.itemId!, loadout.weapon.material!, loadout.weapon.craft, loadout.weapon.shaft, loadout.weapon.arrow);
+    dmg = finalW.dmg;
+  }
+  if (loadout.body) {
+    const finalA = getArmorFinal(loadout.body.itemId!, loadout.body.upgrade);
+    armorValue = finalA.reduce;
+    dodgeBp = finalA.dodge * 100;
+    hp = finalA.stamina;
+  }
+  if (loadout.offHand) {
+    const isShield = shields.some((s) => s.id === loadout.offHand!.itemId);
+    if (isShield) {
+      const finalS = getShieldFinal(loadout.offHand!.itemId!);
+      blockBp += finalS.blockMod * 10000;
+      dodgeBp += finalS.dodgeMod * 100;
+    } else {
+      blockBp = 0;
+    }
+  }
 
   return {
     candidateId: `arena_candidate_${Date.now().toString(36)}_${index}`,
@@ -61,13 +89,14 @@ function buildBotCandidate(state: GameState, seed: string, index: number): Arena
     attributes,
     combatPreview: {
       hp,
-      armor,
-      damageMin: weaponMin,
-      damageMax: weaponMax,
-      critChanceBp: Math.floor(MathCore.getCritChance(attributes.luck, level) * 10000),
-      blockChanceBp: CLASS_CONFIG[classId].blockChanceBp || undefined,
-      dodgeChanceBp: CLASS_CONFIG[classId].dodgeChanceBp || undefined,
+      armor: armorValue,
+      damageMin: dmg,
+      damageMax: dmg,
+      critChanceBp: 0,
+      blockChanceBp: blockBp,
+      dodgeChanceBp: Math.max(0, dodgeBp),
     },
+    loadout,
   };
 }
 
@@ -87,6 +116,7 @@ function candidateToSnapshot(candidate: ArenaOpponentPreview): CombatantSnapshot
     rank: candidate.rank,
     avatarId: candidate.avatarId,
     equipmentSummary: { itemPowerTotal: 0 },
+    loadout: candidate.loadout,
   };
 }
 
@@ -108,6 +138,7 @@ function playerSnapshotToCombatant(state: GameState): CombatantSnapshot {
     rank: state.arena.rank ?? null,
     avatarId: state.player.avatarId,
     equipmentSummary: snapshot.equipmentSummary,
+    loadout: snapshot.loadout,
   };
 }
 

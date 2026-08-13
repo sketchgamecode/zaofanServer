@@ -21,6 +21,12 @@ import { GameError } from './errors.js';
 import { spendResource } from './resourceService.js';
 import { generateBlackMarketItems } from './equipmentGenerator.js';
 import { isEquipmentSlot } from '../types/gameState.js';
+import { baseWeapons } from '../lib/equipmentData.js';
+
+function isTwoHanded(itemId: string | undefined): boolean {
+  if (!itemId) return false;
+  return baseWeapons.some((w) => w.id === itemId && w.grip === 'twohand');
+}
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -146,6 +152,20 @@ export function buyAndEquipItem(
     throw new GameError('INVALID_EQUIPMENT_SLOT', `无效槽位：${String(item.slot)}`);
   }
   const targetSlot = item.slot;
+
+  // 双手武器冲突判定
+  if (targetSlot === 'weapon' && isTwoHanded(item.itemId)) {
+    if (state.equipment.equipped.offHand) {
+      throw new GameError('INVALID_EQUIPMENT_SLOT', '双手武器无法与副手装备或盾牌同时穿戴，请先卸下副手。');
+    }
+  }
+  if (targetSlot === 'offHand') {
+    const equippedWeapon = state.equipment.equipped.weapon;
+    if (equippedWeapon && isTwoHanded(equippedWeapon.itemId)) {
+      throw new GameError('INVALID_EQUIPMENT_SLOT', '已穿戴双手武器，无法再装备副手。');
+    }
+  }
+
   const previousItem = state.equipment.equipped[targetSlot] ?? null;
 
   if (previousItem) {
