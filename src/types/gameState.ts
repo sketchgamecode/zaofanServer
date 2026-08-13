@@ -311,6 +311,17 @@ export type CombatantSnapshotLoadout = {
   arrow?: string;
 };
 
+export type BattleSide = {
+  hp: number;
+  damageMin: number;
+  damageMax: number;
+  critChanceBp: number;
+  dodgeChanceBp?: number;
+  blockChanceBp?: number;
+  armor: number;
+  level: number;
+};
+
 export type DungeonKey = {
   dungeonId: string;
   name: string;
@@ -354,6 +365,12 @@ export type BattleHitEvent = {
   wasDodged: boolean;
   armorReductionBp: number;
   rageMultiplierBp: number;
+  sancaiAction?: string;
+  sancaiOutcome?: string;
+  sancaiWeapon?: string;
+  sancaiTriggers?: string[];
+  actorStamina?: number;
+  targetStamina?: number;
 };
 
 export type BattleActionEvent = {
@@ -367,7 +384,7 @@ export type BattleResultV2 = {
   schemaVersion: 2;
   context: BattleContext;
   seedPublicHash: string;
-  winner: 'player' | 'enemy';
+  winner: 'player' | 'enemy' | 'draw';
   playerWon: boolean;
   player: {
     id: string;

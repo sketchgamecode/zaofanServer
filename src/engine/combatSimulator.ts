@@ -194,7 +194,7 @@ function normalizeFighter(
   }
 
   return {
-    id: (snapshot as any).playerId ?? (snapshot as any).enemyId ?? snapshot.id ?? 'unknown',
+    id: (snapshot as any).playerId ?? (snapshot as any).enemyId ?? (snapshot as any).id ?? 'unknown',
     name: (snapshot as any).displayName ?? (snapshot as any).name ?? 'Fighter',
     level,
     classId,
@@ -497,7 +497,7 @@ export function simulateBattleV2(input: {
   }
 
   // 计算胜负
-  let winner: SideKey = 'draw';
+  let winner: 'player' | 'enemy' | 'draw' = 'draw';
   if (player.hp <= 0 && enemy.hp <= 0) {
     winner = 'draw';
   } else if (enemy.hp <= 0) {

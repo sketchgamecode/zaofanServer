@@ -179,7 +179,7 @@ export function getWeaponFinal(
     };
   }
 
-  const mat = materials.find((m) => m.id === materialId) || { tier: 3, id: 'chaogang', dmg_scale: 1.0, durability_scale: 1.0 };
+  const mat = materials.find((m) => m.id === materialId) || ({ tier: 3, id: 'chaogang', dmg_scale: 1.0, durability_scale: 1.0 } as Material);
   const composite = equipmentData.composite_craft;
 
   // 1. 伤害 dmg

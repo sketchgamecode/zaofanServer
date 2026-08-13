@@ -94,11 +94,12 @@ function makeState(overrides: Partial<GameState['player'] & { copper?: number }>
 function makeCtx(state: GameState) {
   let dirty = false;
   return {
+    playerId: state.player.id ?? 'p1',
     state,
     now: 1_000_000,
     get dirty() { return dirty; },
     markDirty() { dirty = true; },
-  };
+  } as any;
 }
 
 describe('pickShopRarity()', () => {

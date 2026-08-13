@@ -118,7 +118,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
         { "id": "bow_zhentian", "name": "震天弓", "class": "bow", "trait": "贯日" }
       ]
     };
-    const example = rng.pick(legendaryRules.examples);
+    const example: any = rng.pick(legendaryRules.examples);
     
     // 如果是名弓，槽位强制为 weapon
     const actualSlot = (example.class === 'bow' || example.class === 'spear') ? 'weapon' : slot;

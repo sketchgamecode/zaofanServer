@@ -1107,16 +1107,9 @@ function buildCharacterInfoViewFromActor(actor: WorldActor): CharacterInfoView {
     },
     equipment: {
       equipped: {
-        head: null,
-        body: null,
-        hands: null,
-        feet: null,
-        neck: null,
-        belt: null,
-        ring: null,
-        trinket: null,
         weapon: null,
         offHand: null,
+        body: null,
       },
     },
     inventory: {
