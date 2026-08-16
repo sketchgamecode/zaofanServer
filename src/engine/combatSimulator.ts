@@ -101,21 +101,38 @@ export function getFallbackLoadout(classId: PlayerClassId, level: number): Comba
     armorId = 'liangdang';
   }
 
-  const createMockItem = (itemId: string, slot: 'weapon' | 'offHand' | 'body'): EquipmentItem => ({
-    id: `mock_${itemId}`,
-    name: '模拟装备',
-    description: '模拟装备',
-    slot,
-    rarity: level >= 45 ? 2 : (level >= 25 ? 1 : 0),
-    sellPrice: 0,
-    bonusAttributes: {},
-    itemId,
-    material,
-    craft,
-    shaft,
-    upgrade,
-    arrow,
-  });
+  const ITEM_NAMES: Record<string, string> = {
+    dao_hengdao: '制式横刀',
+    jian_danshou: '精钢单手剑',
+    dao_liuye: '柳叶刀',
+    chui_guduo: '骨朵锤',
+    tengpai: '藤牌',
+    buyi: '麻布粗衣',
+    pijia: '熟牛皮甲',
+    zhajia: '生铁札甲',
+    zhijia: '硬纸防箭甲',
+    liangdang: '两当铠',
+    mingguang: '明制明光甲',
+  };
+
+  const createMockItem = (itemId: string, slot: 'weapon' | 'offHand' | 'body'): EquipmentItem => {
+    const realName = ITEM_NAMES[itemId] || '制式装备';
+    return {
+      id: `eq_${slot}_fallback_${itemId}`,
+      name: realName,
+      description: `装备：${realName}`,
+      slot,
+      rarity: level >= 45 ? 2 : (level >= 25 ? 1 : 0),
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId,
+      material,
+      craft,
+      shaft,
+      upgrade,
+      arrow,
+    };
+  };
 
   return {
     weapon: createMockItem(weaponId, 'weapon'),

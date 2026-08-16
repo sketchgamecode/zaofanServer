@@ -665,6 +665,7 @@ export type ArenaOpponentPreview = {
   candidateId: string;
   playerId: string;
   displayName: string;
+  title?: string;
   avatarId?: string;
   level: number;
   classId: PlayerClassId;

@@ -12,7 +12,61 @@ import { grantExp, grantResource, spendResource } from './resourceService.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
 import { getWeaponFinal, getArmorFinal, getShieldFinal, shields } from '../lib/equipmentData.js';
 
+import { generateEquipment } from './equipmentGenerator.js';
+
 const ARENA_COOLDOWN_MS = 10 * 60 * 1000;
+
+const BOT_NAMES_POOL = [
+  '刘猛奎', '齐山石', '孙尚香', '焦挺', '韩伯龙', '石秀',
+  '关胜', '呼延灼', '秦明', '董平', '张清', '徐宁',
+  '索超', '史进', '燕青', '魏定国', '单廷珪', '宣赞',
+  '郝思文', '彭玘', '凌振', '蒋敬', '薛永', '李忠', '周通'
+];
+
+const ARCHETYPE_CONFIGS = [
+  {
+    // Candidate 0: 重装锤枪/高力量型
+    classIds: ['CLASS_A', 'CLASS_E'] as PlayerClassId[],
+    titles: ['铁甲客', '破阵锤手', '华阳豪强', '横刀侍卫', '光顶'],
+    forcedWeapons: ['chui_guduo', 'qiang_daqiang', 'dao_changdao'],
+    forcedArmors: ['zhajia', 'mingguang', 'liangdang'],
+    statDist: (base: number) => ({
+      strength: Math.floor(base * 1.4),
+      constitution: Math.floor(base * 1.1),
+      agility: Math.floor(base * 0.7),
+      intelligence: Math.floor(base * 0.6),
+      luck: Math.floor(base * 0.5),
+    }),
+  },
+  {
+    // Candidate 1: 疾风轻甲/双持敏捷型
+    classIds: ['CLASS_B', 'CLASS_D'] as PlayerClassId[],
+    titles: ['地榜游侠', '双刀绝客', '疾风刺客', '独行剑侠', '飞刀浪子'],
+    forcedWeapons: ['dao_liuye', 'dao_yanling', 'jian_danshou'],
+    forcedArmors: ['pijia', 'zhijia', 'tengjia'],
+    statDist: (base: number) => ({
+      agility: Math.floor(base * 1.45),
+      luck: Math.floor(base * 0.9),
+      strength: Math.floor(base * 0.8),
+      constitution: Math.floor(base * 0.8),
+      intelligence: Math.floor(base * 0.5),
+    }),
+  },
+  {
+    // Candidate 2: 智计持盾/高防佩剑型
+    classIds: ['CLASS_C', 'CLASS_A'] as PlayerClassId[],
+    titles: ['持枪客', '持盾羽林', '华阳拳师', '羽扇谋臣', '护卫头领'],
+    forcedWeapons: ['jian_danshou', 'dao_huanshou'],
+    forcedArmors: ['zhijia', 'mianjia', 'mingguang'],
+    statDist: (base: number) => ({
+      intelligence: Math.floor(base * 1.4),
+      constitution: Math.floor(base * 1.0),
+      strength: Math.floor(base * 0.7),
+      agility: Math.floor(base * 0.7),
+      luck: Math.floor(base * 0.6),
+    }),
+  },
+];
 
 function ensureArenaActive(state: GameState): void {
   if (state.player.status !== 'ACTIVE') throw new GameError('CHARACTER_NOT_CREATED', 'Character is not active.');
@@ -27,72 +81,127 @@ function ensureArenaActive(state: GameState): void {
   state.arena.candidateSetId ??= null;
 }
 
-function buildBotCandidate(state: GameState, seed: string, index: number): ArenaOpponentPreview {
+function buildBotCandidate(
+  state: GameState,
+  seed: string,
+  index: number,
+  usedNames: Set<string>
+): ArenaOpponentPreview {
   const rng = createSeededRandom(`${seed}:${index}`);
-  const classes: PlayerClassId[] = ['CLASS_A', 'CLASS_B', 'CLASS_C', 'CLASS_D', 'CLASS_E'];
-  const classId = rng.pick(classes);
-  const level = Math.max(1, state.player.level + rng.int(-2, 2));
-  const mainStat = CLASS_CONFIG[classId].mainStat;
-  const base = 8 + level * 2 + rng.int(0, 8);
-  const attributes = {
-    strength: base,
-    intelligence: base,
-    agility: base,
-    constitution: Math.floor(base * 0.85),
-    luck: Math.floor(base * 0.45),
-  };
-  attributes[mainStat] = Math.floor(base * 1.25);
+  const config = ARCHETYPE_CONFIGS[index % ARCHETYPE_CONFIGS.length];
+  const classId = rng.pick(config.classIds);
 
+  // 1. 名字去重
+  let displayName = rng.pick(BOT_NAMES_POOL);
+  let nameAttempts = 0;
+  while (usedNames.has(displayName) && nameAttempts < 20) {
+    displayName = rng.pick(BOT_NAMES_POOL);
+    nameAttempts++;
+  }
+  usedNames.add(displayName);
+
+  // 2. 等级 (根据玩家等级上下合理浮动)
+  const levelDelta = index === 0 ? rng.int(-1, 2) : (index === 1 ? rng.int(-2, 3) : rng.int(-2, 2));
+  const level = Math.max(1, Math.min(80, state.player.level + levelDelta));
+
+  // 3. 称号与排名
+  const archetypeTitle = rng.pick(config.titles);
   const honor = Math.max(0, (state.arena.honor ?? 1000) + rng.int(-180, 220));
+  const rank = Math.max(1, 5000 - honor + index);
+  const title = archetypeTitle;
 
-  // 为 Bot 候选人自动装备符合其等级与职业的 Sancai 武器
-  const loadout = getFallbackLoadout(classId, level);
+  // 4. 属性 (真实数值，绝不为 0)
+  const baseStat = 12 + level * 3 + rng.int(0, 4);
+  const attributes = config.statDist(baseStat);
 
-  let dmg = 12;
-  let blockBp = 1500;
-  let dodgeBp = 0;
-  let armorValue = 0;
-  let hp = 100;
+  // 5. 真实 Sancai 装备 (Loadout)
+  const weaponItem = generateEquipment({
+    playerLevel: level,
+    slot: 'weapon',
+    classId,
+    forcedItemId: rng.pick(config.forcedWeapons),
+    rng,
+  });
 
-  if (loadout.weapon) {
-    const finalW = getWeaponFinal(loadout.weapon.itemId!, loadout.weapon.material!, loadout.weapon.craft, loadout.weapon.shaft, loadout.weapon.arrow);
-    dmg = finalW.dmg;
+  const bodyItem = generateEquipment({
+    playerLevel: level,
+    slot: 'body',
+    classId,
+    forcedItemId: rng.pick(config.forcedArmors),
+    rng,
+  });
+
+  let offHandItem = null;
+  if (classId === 'CLASS_D') {
+    offHandItem = generateEquipment({
+      playerLevel: level,
+      slot: 'offHand',
+      classId: 'CLASS_D',
+      forcedItemId: 'dao_liuye',
+      rng,
+    });
+  } else if (index === 2 || rng.next() < 0.5) {
+    offHandItem = generateEquipment({
+      playerLevel: level,
+      slot: 'offHand',
+      forcedItemId: rng.pick(['tengpai', 'pangpai']),
+      rng,
+    });
   }
-  if (loadout.body) {
-    const finalA = getArmorFinal(loadout.body.itemId!, loadout.body.upgrade);
-    armorValue = finalA.reduce;
-    dodgeBp = finalA.dodge * 100;
-    hp = finalA.stamina;
-  }
-  if (loadout.offHand) {
-    const isShield = shields.some((s) => s.id === loadout.offHand!.itemId);
+
+  const loadout = {
+    weapon: weaponItem,
+    offHand: offHandItem,
+    body: bodyItem,
+    arrow: weaponItem.arrow ?? 'normal',
+  };
+
+  // 6. 战斗快照数值 (Combat Preview)
+  const finalW = getWeaponFinal(
+    weaponItem.itemId || weaponItem.id,
+    weaponItem.material || 'chaogang',
+    weaponItem.craft,
+    weaponItem.shaft,
+    weaponItem.arrow
+  );
+  const finalA = getArmorFinal(bodyItem.itemId || bodyItem.id, bodyItem.upgrade);
+
+  let blockBp = CLASS_CONFIG[classId].blockChanceBp ?? 0;
+  let dodgeBp = finalA.dodge * 100 + (CLASS_CONFIG[classId].dodgeChanceBp ?? 0);
+  if (offHandItem) {
+    const isShield = shields.some((s) => s.id === offHandItem.itemId);
     if (isShield) {
-      const finalS = getShieldFinal(loadout.offHand!.itemId!);
-      blockBp += finalS.blockMod * 10000;
-      dodgeBp += finalS.dodgeMod * 100;
+      const finalS = getShieldFinal(offHandItem.itemId!);
+      blockBp += Math.round(finalS.blockMod * 10000);
+      dodgeBp += Math.round(finalS.dodgeMod * 100);
     } else {
       blockBp = 0;
     }
   }
 
+  const hp = MathCore.getMaxHP(attributes.constitution, level, classId);
+  const armorValue = finalA.reduce;
+  const critChanceBp = Math.floor(MathCore.getCritChance(attributes.luck, state.player.level) * 10000);
+
   return {
     candidateId: `arena_candidate_${Date.now().toString(36)}_${index}`,
     playerId: `bot_${seed}_${index}`,
-    displayName: rng.pick(['林冲', '鲁智深', '杨志', '武松', '花荣', '扈三娘']),
+    displayName,
+    title,
     avatarId: `avatar_placeholder_${String(rng.int(0, 63)).padStart(3, '0')}`,
     level,
     classId,
     raceId: 'RACE_01',
     honor,
-    rank: Math.max(1, 5000 - honor + index),
+    rank,
     guildName: undefined,
     attributes,
     combatPreview: {
       hp,
       armor: armorValue,
-      damageMin: dmg,
-      damageMax: dmg,
-      critChanceBp: 0,
+      damageMin: finalW.dmg,
+      damageMax: finalW.dmg,
+      critChanceBp,
       blockChanceBp: blockBp,
       dodgeChanceBp: Math.max(0, dodgeBp),
     },
@@ -144,7 +253,8 @@ function playerSnapshotToCombatant(state: GameState): CombatantSnapshot {
 
 function refreshCandidates(state: GameState, now: number): ArenaOpponentPreview[] {
   const setId = `arena_set_${now.toString(36)}`;
-  const candidates = [0, 1, 2].map((index) => buildBotCandidate(state, setId, index));
+  const usedNames = new Set<string>();
+  const candidates = [0, 1, 2].map((index) => buildBotCandidate(state, setId, index, usedNames));
   state.arena.candidateSetId = setId;
   state.arena.candidates = candidates;
   return candidates;
