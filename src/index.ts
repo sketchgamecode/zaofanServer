@@ -12,17 +12,37 @@ import { attachRequestContext } from './middleware/requestContext.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
-const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173')
+const defaultAllowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'https://game.sketchgame.net',
+  'https://api.sketchgame.net',
+  'https://sketchgame.net',
+];
+
+const envAllowed = (process.env.ALLOWED_ORIGINS ?? '')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+const allAllowed = new Set([...defaultAllowedOrigins, ...envAllowed]);
 
 app.use(attachRequestContext);
 app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allAllowed.has(origin) ||
+        origin.endsWith('.sketchgame.net') ||
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1')
+      ) {
         callback(null, true);
         return;
       }
@@ -86,6 +106,6 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 app.listen(PORT, () => {
   logServerEvent('server_started', {
     port: PORT,
-    allowedOrigins,
+    allowedOrigins: Array.from(allAllowed),
   });
 });
