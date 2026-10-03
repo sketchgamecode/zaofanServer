@@ -279,14 +279,21 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
   // 随机唯一 ID
   const id = `eq_${slot}_${Date.now().toString(36)}_${Math.floor(rng.next() * 0xffff).toString(16)}`;
 
-  return {
-    id,
-    name,
-    description: desc,
-    slot,
-    rarity,
-    iconId: `item_${slot}_${String(rng.int(1, 5)).padStart(2, '0')}`,
-    subType,
+    const customIconId = (slot === 'weapon'
+      ? baseWeapons.find((w) => w.id === itemId)?.iconId
+      : slot === 'body'
+        ? armors.find((a) => a.id === itemId)?.iconId
+        : shields.find((s) => s.id === itemId)?.iconId)
+      || `item_${slot}_${String(rng.int(1, 5)).padStart(2, '0')}`;
+
+    return {
+      id,
+      name,
+      description: desc,
+      slot,
+      rarity,
+      iconId: customIconId,
+      subType,
     armor: armorVal,
     weaponDamage: weaponDamageVal,
     price,

@@ -4,7 +4,29 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const jsonPath = path.resolve(__dirname, '../data/equipment_data.json');
+
+function resolvePaths() {
+  const localPath = path.resolve(__dirname, '../data/equipment_data.json');
+  if (fs.existsSync(localPath)) {
+    return {
+      jsonPath: localPath,
+      snapshotsDir: path.resolve(__dirname, '../data/snapshots'),
+    };
+  }
+  const srcPath = path.resolve(__dirname, '../../src/data/equipment_data.json');
+  if (fs.existsSync(srcPath)) {
+    return {
+      jsonPath: srcPath,
+      snapshotsDir: path.resolve(__dirname, '../../src/data/snapshots'),
+    };
+  }
+  return {
+    jsonPath: localPath,
+    snapshotsDir: path.resolve(__dirname, '../data/snapshots'),
+  };
+}
+
+const { jsonPath, snapshotsDir } = resolvePaths();
 const rawJson = fs.readFileSync(jsonPath, 'utf-8');
 
 export const equipmentData = JSON.parse(rawJson);
@@ -14,6 +36,7 @@ export const equipmentData = JSON.parse(rawJson);
 export interface BaseWeapon {
   id: string;
   name: string;
+  iconId?: string;
   class: 'blade' | 'sword' | 'spear' | 'blunt' | 'bow' | 'fist';
   dmg: number;
   interval: number;
@@ -34,6 +57,8 @@ export interface BaseWeapon {
   repel_immune_vs?: string;
   ignore_reduce?: number;
   dual_allowed?: boolean;
+  bonus_a?: number;
+  bonus_scale?: number;
 }
 
 export interface Material {
@@ -57,6 +82,7 @@ export interface ShaftMaterial {
 export interface Armor {
   id: string;
   name: string;
+  iconId?: string;
   a: number;
   reduce: number;
   stamina: number;
@@ -78,6 +104,7 @@ export interface ArmorMaterialUpgrade {
 export interface Shield {
   id: string;
   name: string;
+  iconId?: string;
   block_mod: number;
   block_cost_mod: number;
   dodge_mod: number;
@@ -95,6 +122,7 @@ export interface Arrow {
 export interface WeaponFinal {
   id: string;
   name: string;
+  iconId?: string;
   class: 'blade' | 'sword' | 'spear' | 'blunt' | 'bow' | 'fist';
   dmg: number;
   interval: number;
@@ -120,6 +148,7 @@ export interface WeaponFinal {
 export interface ArmorFinal {
   id: string;
   name: string;
+  iconId?: string;
   a: number;
   reduce: number;
   stamina: number;
@@ -133,6 +162,7 @@ export interface ArmorFinal {
 export interface ShieldFinal {
   id: string;
   name: string;
+  iconId?: string;
   blockMod: number;
   blockCostMod: number;
   dodgeMod: number;
@@ -147,6 +177,148 @@ export const armors: Armor[] = equipmentData.armors;
 export const armorMaterialUpgrades: ArmorMaterialUpgrade[] = equipmentData.armor_material_upgrades;
 export const shields: Shield[] = equipmentData.shields;
 export const arrows: Arrow[] = equipmentData.arrows;
+
+// ---------- 热重载与持久化 ----------
+
+export function reloadEquipmentData(newData?: any): void {
+  const data = newData || JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  for (const k of Object.keys(equipmentData)) {
+    delete (equipmentData as any)[k];
+  }
+  Object.assign(equipmentData, data);
+
+  if (Array.isArray(data.weapons)) {
+    baseWeapons.length = 0;
+    baseWeapons.push(...data.weapons);
+  }
+  if (Array.isArray(data.materials)) {
+    materials.length = 0;
+    materials.push(...data.materials);
+  }
+  if (Array.isArray(data.shaft_materials)) {
+    shaftMaterials.length = 0;
+    shaftMaterials.push(...data.shaft_materials);
+  }
+  if (Array.isArray(data.armors)) {
+    armors.length = 0;
+    armors.push(...data.armors);
+  }
+  if (Array.isArray(data.armor_material_upgrades)) {
+    armorMaterialUpgrades.length = 0;
+    armorMaterialUpgrades.push(...data.armor_material_upgrades);
+  }
+  if (Array.isArray(data.shields)) {
+    shields.length = 0;
+    shields.push(...data.shields);
+  }
+  if (Array.isArray(data.arrows)) {
+    arrows.length = 0;
+    arrows.push(...data.arrows);
+  }
+}
+
+export function saveEquipmentData(newData: any): void {
+  fs.writeFileSync(jsonPath, JSON.stringify(newData, null, 2), 'utf-8');
+  reloadEquipmentData(newData);
+}
+
+// ---------- 快照版本管理 ----------
+
+export type EquipmentSnapshotMeta = {
+  id: string;
+  filename: string;
+  note: string;
+  createdAt: number;
+  weaponCount: number;
+  armorCount: number;
+  sizeBytes: number;
+};
+
+export function ensureSnapshotsDir(): void {
+  if (!fs.existsSync(snapshotsDir)) {
+    fs.mkdirSync(snapshotsDir, { recursive: true });
+  }
+}
+
+export function listSnapshots(): EquipmentSnapshotMeta[] {
+  ensureSnapshotsDir();
+  const files = fs.readdirSync(snapshotsDir).filter((f) => f.endsWith('.json'));
+  const snapshots: EquipmentSnapshotMeta[] = [];
+
+  for (const f of files) {
+    try {
+      const fullPath = path.join(snapshotsDir, f);
+      const stat = fs.statSync(fullPath);
+      const raw = fs.readFileSync(fullPath, 'utf-8');
+      const json = JSON.parse(raw);
+      snapshots.push({
+        id: f.replace('.json', ''),
+        filename: f,
+        note: json._snapshotNote || '无备注',
+        createdAt: json._snapshotCreatedAt || stat.mtimeMs,
+        weaponCount: json.weapons?.length ?? 0,
+        armorCount: json.armors?.length ?? 0,
+        sizeBytes: stat.size,
+      });
+    } catch (e) {
+      console.warn(`Failed to read snapshot file: ${f}`, e);
+    }
+  }
+
+  return snapshots.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function createSnapshot(note: string): EquipmentSnapshotMeta {
+  ensureSnapshotsDir();
+  const now = Date.now();
+  const dateStr = new Date(now).toISOString().replace(/[:.]/g, '-');
+  const safeNote = (note || 'backup').trim().replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_').slice(0, 30);
+  const id = `snap_${dateStr}_${safeNote}`;
+  const filename = `${id}.json`;
+  const fullPath = path.join(snapshotsDir, filename);
+
+  const currentData = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  currentData._snapshotNote = note;
+  currentData._snapshotCreatedAt = now;
+
+  fs.writeFileSync(fullPath, JSON.stringify(currentData, null, 2), 'utf-8');
+  const stat = fs.statSync(fullPath);
+
+  return {
+    id,
+    filename,
+    note,
+    createdAt: now,
+    weaponCount: currentData.weapons?.length ?? 0,
+    armorCount: currentData.armors?.length ?? 0,
+    sizeBytes: stat.size,
+  };
+}
+
+export function rollbackSnapshot(snapshotId: string): void {
+  ensureSnapshotsDir();
+  const filename = snapshotId.endsWith('.json') ? snapshotId : `${snapshotId}.json`;
+  const fullPath = path.join(snapshotsDir, filename);
+  if (!fs.existsSync(fullPath)) {
+    throw new Error(`Snapshot ${snapshotId} not found`);
+  }
+
+  const raw = fs.readFileSync(fullPath, 'utf-8');
+  const json = JSON.parse(raw);
+  delete json._snapshotNote;
+  delete json._snapshotCreatedAt;
+
+  saveEquipmentData(json);
+}
+
+export function deleteSnapshot(snapshotId: string): void {
+  ensureSnapshotsDir();
+  const filename = snapshotId.endsWith('.json') ? snapshotId : `${snapshotId}.json`;
+  const fullPath = path.join(snapshotsDir, filename);
+  if (fs.existsSync(fullPath)) {
+    fs.unlinkSync(fullPath);
+  }
+}
 
 // ---------- 属性派生计算器 ----------
 

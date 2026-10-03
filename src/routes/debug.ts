@@ -5,6 +5,7 @@ import { loadOrCreateGameState, saveGameState, resetGameStateForPlayer } from '.
 import { loadOrCreateWorldState } from '../lib/worldStateStore.js';
 import { getNow } from '../lib/time.js';
 import {
+  equipmentData,
   baseWeapons,
   armors,
   shields,
@@ -15,6 +16,11 @@ import {
   getWeaponFinal,
   getArmorFinal,
   getShieldFinal,
+  saveEquipmentData,
+  createSnapshot,
+  listSnapshots,
+  rollbackSnapshot,
+  deleteSnapshot,
 } from '../lib/equipmentData.js';
 import type {
   EquipmentItem,
@@ -645,851 +651,109 @@ router.post('/config', (req, res) => {
 });
 
 // ==========================================
+// API: 全服一键清档 (Wipe All Saves)
+// ==========================================
+router.post('/wipe-all-saves', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const p1 = supabaseAdmin.from('player_saves').delete().neq('player_id', '00000000-0000-0000-0000-000000000000');
+    const p2 = supabaseAdmin.from('battle_replays').delete().neq('replay_id', '');
+    const [res1, res2] = await Promise.all([p1, p2]);
+    if (res1.error) throw new Error(`清空 player_saves 失败: ${res1.error.message}`);
+    if (res2.error) throw new Error(`清空 battle_replays 失败: ${res2.error.message}`);
+
+    res.json({
+      ok: true,
+      message: '全服玩家存档及战斗回放已彻底清空！下次登录将生成最新格式初始存档。',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '清档操作失败' });
+  }
+});
+
+// ==========================================
+// API: 装备配置数据读取与保存
+// ==========================================
+router.get('/config/equipment', (_req: Request, res: Response): void => {
+  res.json({
+    ok: true,
+    data: equipmentData,
+  });
+});
+
+router.post('/config/equipment', (req: Request, res: Response): void => {
+  try {
+    const newData = req.body;
+    if (!newData || typeof newData !== 'object') {
+      res.status(400).json({ ok: false, error: '无效的装备配置数据' });
+      return;
+    }
+    saveEquipmentData(newData);
+    res.json({
+      ok: true,
+      message: '装备数值配置已保存并实时热重载生效！',
+      data: equipmentData,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '保存配置失败' });
+  }
+});
+
+// ==========================================
+// API: 数值配置快照与回滚
+// ==========================================
+router.get('/config/snapshots', (_req: Request, res: Response): void => {
+  try {
+    const snapshots = listSnapshots();
+    res.json({ ok: true, snapshots });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '获取快照失败' });
+  }
+});
+
+router.post('/config/snapshot', (req: Request, res: Response): void => {
+  try {
+    const { note } = req.body;
+    const snap = createSnapshot(note || '手动备份');
+    res.json({ ok: true, message: `配置快照【${snap.note}】已备份成功！`, snapshot: snap });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '创建快照失败' });
+  }
+});
+
+router.post('/config/rollback', (req: Request, res: Response): void => {
+  try {
+    const { snapshotId } = req.body;
+    if (!snapshotId) {
+      res.status(400).json({ ok: false, error: '缺少 snapshotId' });
+      return;
+    }
+    rollbackSnapshot(snapshotId);
+    res.json({ ok: true, message: `已成功回滚到快照【${snapshotId}】，最新数值已热重载生效！` });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '回滚快照失败' });
+  }
+});
+
+router.delete('/config/snapshot/:id', (req: Request, res: Response): void => {
+  try {
+    const id = String(req.params.id);
+    deleteSnapshot(id);
+    res.json({ ok: true, message: '快照文件已删除' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '删除快照失败' });
+  }
+});
+
+// ==========================================
 // Web GUI: 单页面可视化调试管理控制台
 // ==========================================
 router.get('/', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:;");
 
-  const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>大宋造反模拟器 · 开发者调试控制台</title>
-  <style>
-    :root {
-      --bg: #0b0f19;
-      --card-bg: #151d30;
-      --card-border: #232f48;
-      --accent: #f59e0b;
-      --accent-hover: #d97706;
-      --text: #e2e8f0;
-      --text-muted: #94a3b8;
-      --success: #10b981;
-      --danger: #ef4444;
-      --cyan: #06b6d4;
-      --purple: #8b5cf6;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.5;
-      padding: 20px;
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--card-border);
-      margin-bottom: 20px;
-    }
-    .header h1 { font-size: 22px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
-    .header .subtitle { font-size: 13px; color: var(--text-muted); }
-    
-    .player-bar {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      padding: 14px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-    .player-bar select, .player-bar input {
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      color: #fff;
-      padding: 8px 12px;
-      border-radius: 6px;
-      font-size: 14px;
-      min-width: 260px;
-    }
-    .btn {
-      background: var(--accent);
-      color: #000;
-      font-weight: 600;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      transition: all 0.2s;
-    }
-    .btn:hover { background: var(--accent-hover); }
-    .btn-secondary { background: #334155; color: #fff; }
-    .btn-secondary:hover { background: #475569; }
-    .btn-danger { background: var(--danger); color: #fff; }
-    .btn-danger:hover { background: #dc2626; }
-    .btn-success { background: var(--success); color: #fff; }
-    .btn-success:hover { background: #059669; }
-    .btn-purple { background: var(--purple); color: #fff; }
-    .btn-purple:hover { background: #7c3aed; }
-    .btn-sm { padding: 4px 10px; font-size: 12px; }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-      gap: 20px;
-      margin-bottom: 20px;
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 16px;
-    }
-    .card-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--accent);
-      margin-bottom: 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid var(--card-border);
-      padding-bottom: 8px;
-    }
-    .form-group { margin-bottom: 12px; }
-    .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-    .form-group input, .form-group select {
-      width: 100%;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      color: #fff;
-      padding: 8px 10px;
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-
-    .preset-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-    }
-
-    .item-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      max-height: 280px;
-      overflow-y: auto;
-    }
-    .item-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      padding: 8px 12px;
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .item-info { display: flex; flex-direction: column; gap: 2px; }
-    .item-name { font-weight: 600; color: #38bdf8; }
-    .item-desc { font-size: 11px; color: var(--text-muted); }
-    .rarity-4 { color: #f59e0b !important; }
-    .rarity-3 { color: #c084fc !important; }
-    .rarity-2 { color: #60a5fa !important; }
-    .rarity-1 { color: #4ade80 !important; }
-    .rarity-0 { color: #94a3b8 !important; }
-
-    .toast {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: #1e293b;
-      color: #fff;
-      padding: 12px 20px;
-      border-radius: 8px;
-      border-left: 4px solid var(--success);
-      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-      transform: translateY(100px);
-      opacity: 0;
-      transition: all 0.3s;
-      z-index: 1000;
-    }
-    .toast.show { transform: translateY(0); opacity: 1; }
-    .toast.error { border-left-color: var(--danger); }
-
-    textarea {
-      width: 100%;
-      height: 180px;
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      color: #38bdf8;
-      font-family: monospace;
-      font-size: 12px;
-      padding: 10px;
-      border-radius: 6px;
-      resize: vertical;
-    }
-    .badge {
-      font-size: 11px;
-      padding: 2px 6px;
-      border-radius: 4px;
-      background: #334155;
-      color: #94a3b8;
-    }
-  </style>
-</head>
-<body>
-
-  <div class="header">
-    <div>
-      <h1>⚔️ 大宋造反模拟器 · 开发者调试控制台</h1>
-      <div class="subtitle">免登录鉴权 · 自由修改玩家资源、等级、五维属性与自定义械斗神装道具</div>
-    </div>
-    <div>
-      <span class="badge" id="serverTimeBadge">Server Ready</span>
-    </div>
-  </div>
-
-  <!-- 玩家选择条 -->
-  <div class="player-bar">
-    <label style="font-weight:600;font-size:13px;color:var(--accent)">👤 选择存档:</label>
-    <select id="playerSelect" onchange="onPlayerSelected(this.value)">
-      <option value="">-- 加载中... --</option>
-    </select>
-    <button class="btn btn-secondary btn-sm" onclick="loadPlayers()">🔄 刷新列表</button>
-    <input type="text" id="manualPlayerId" placeholder="或直接输入 Player ID..." style="min-width:220px">
-    <button class="btn btn-sm" onclick="loadPlayerManual()">⚡ 加载指定玩家</button>
-  </div>
-
-  <div id="dashboard" style="display:none">
-    
-    <!-- 顶部核心状态栏 -->
-    <div style="background:var(--card-bg);border:1px solid var(--card-border);padding:12px 16px;border-radius:8px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">
-      <div>
-        <span style="font-size:16px;font-weight:bold;color:#38bdf8" id="curName">-</span>
-        <span class="badge" style="margin-left:8px" id="curClass">-</span>
-        <span class="badge" id="curLevel">-</span>
-        <span style="font-size:12px;color:var(--text-muted);margin-left:12px" id="curId">-</span>
-      </div>
-      <div>
-        <button class="btn btn-danger btn-sm" onclick="resetCurPlayer()">🗑️ 重置为初始存档</button>
-      </div>
-    </div>
-
-    <!-- 栅格卡片 -->
-    <div class="grid">
-
-      <!-- 卡片 1: 资源修改 -->
-      <div class="card">
-        <div class="card-title">
-          <span>💰 资源修改</span>
-          <button class="btn btn-sm btn-success" onclick="saveResources()">💾 保存资源</button>
-        </div>
-        <div class="row-2">
-          <div class="form-group">
-            <label>铜钱 (Copper)</label>
-            <input type="number" id="resCopper" value="0">
-          </div>
-          <div class="form-group">
-            <label>令牌/蘑菇 (Tokens)</label>
-            <input type="number" id="resTokens" value="0">
-          </div>
-        </div>
-        <div class="row-2">
-          <div class="form-group">
-            <label>沙漏 (Hourglasses)</label>
-            <input type="number" id="resHourglasses" value="0">
-          </div>
-          <div class="form-group">
-            <label>声望 (Prestige)</label>
-            <input type="number" id="resPrestige" value="0">
-          </div>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn btn-secondary btn-sm" onclick="addRes('resCopper', 100000)">+10万铜钱</button>
-          <button class="btn btn-secondary btn-sm" onclick="addRes('resCopper', 1000000)">+100万铜钱</button>
-          <button class="btn btn-secondary btn-sm" onclick="addRes('resTokens', 500)">+500令牌</button>
-          <button class="btn btn-secondary btn-sm" onclick="addRes('resHourglasses', 500)">+500沙漏</button>
-        </div>
-      </div>
-
-      <!-- 卡片 2: 等级与五维属性修改 -->
-      <div class="card">
-        <div class="card-title">
-          <span>⚡ 等级与基础五维属性</span>
-          <button class="btn btn-sm btn-success" onclick="saveAttributes()">💾 保存属性</button>
-        </div>
-        <div class="row-3">
-          <div class="form-group">
-            <label>等级 (Level 1-80)</label>
-            <input type="number" id="attrLevel" value="1">
-          </div>
-          <div class="form-group">
-            <label>经验值 (EXP)</label>
-            <input type="number" id="attrExp" value="0">
-          </div>
-          <div class="form-group">
-            <label>职业 (Class)</label>
-            <select id="attrClass">
-              <option value="CLASS_A">猛将 (Warrior/力)</option>
-              <option value="CLASS_B">游侠 (Scout/敏)</option>
-              <option value="CLASS_C">谋士 (Mage/智)</option>
-              <option value="CLASS_D">杀手 (Assassin/敏)</option>
-              <option value="CLASS_E">绿林好汉 (Berserker/力)</option>
-            </select>
-          </div>
-        </div>
-        <div class="row-3">
-          <div class="form-group">
-            <label>力量 (Strength)</label>
-            <input type="number" id="attrStr" value="10">
-          </div>
-          <div class="form-group">
-            <label>敏捷 (Agility)</label>
-            <input type="number" id="attrAgi" value="10">
-          </div>
-          <div class="form-group">
-            <label>智力 (Intelligence)</label>
-            <input type="number" id="attrInt" value="10">
-          </div>
-        </div>
-        <div class="row-2">
-          <div class="form-group">
-            <label>体质 (Constitution/决定血量)</label>
-            <input type="number" id="attrCon" value="10">
-          </div>
-          <div class="form-group">
-            <label>幸运 (Luck/决定暴击)</label>
-            <input type="number" id="attrLuk" value="10">
-          </div>
-        </div>
-        <div style="display:flex;gap:6px;margin-top:6px">
-          <button class="btn btn-secondary btn-sm" onclick="setAllStats(100)">全五维设为 100</button>
-          <button class="btn btn-secondary btn-sm" onclick="setAllStats(999)">全五维设为 999 (满神)</button>
-        </div>
-      </div>
-
-      <!-- 卡片 3: 一键作弊与测试套件 -->
-      <div class="card">
-        <div class="card-title">
-          <span>👑 快捷测试预设套件 (One-Click Cheats)</span>
-        </div>
-        <div class="preset-grid">
-          <button class="btn btn-purple btn-sm" onclick="applyPreset('max_level_stats')">🌟 一键满级满属性+满资源</button>
-          <button class="btn btn-sm" onclick="applyPreset('max_resources')">💎 满资源 (1000万铜钱/9999令)</button>
-          <button class="btn btn-secondary btn-sm" onclick="applyPreset('god_gear_blade')">🗡️ 镔铁双刀流神装 (双柳叶+明光)</button>
-          <button class="btn btn-secondary btn-sm" onclick="applyPreset('god_gear_spear')">🔱 镔铁破阵枪霸套 (大枪+明光)</button>
-          <button class="btn btn-secondary btn-sm" onclick="applyPreset('god_gear_blunt')">🔨 破甲钝击震伤套 (骨朵+盾+锁子)</button>
-          <button class="btn btn-secondary btn-sm" onclick="applyPreset('all_weapons')">📦 发放全 14 种兵刃到背包</button>
-          <button class="btn btn-secondary btn-sm" onclick="applyPreset('all_armors')">🛡️ 发放全 11 种甲胄/盾到背包</button>
-          <button class="btn btn-danger btn-sm" onclick="applyPreset('clear_inventory')">🧹 清空背包全部道具</button>
-        </div>
-      </div>
-
-      <!-- 卡片 4: 装备道具定制与发放器 -->
-      <div class="card">
-        <div class="card-title">
-          <span>🛠️ 道具/装备定制生成器</span>
-          <button class="btn btn-sm" onclick="grantCustomItem(false)">📥 放入背包</button>
-          <button class="btn btn-sm btn-success" onclick="grantCustomItem(true)">⚡ 直接穿戴</button>
-        </div>
-        <div class="row-3">
-          <div class="form-group">
-            <label>装备部位 (Slot)</label>
-            <select id="makeSlot" onchange="onSlotChanged(this.value)">
-              <option value="weapon">武器 (Weapon)</option>
-              <option value="body">防具 (Body)</option>
-              <option value="offHand">副手/盾牌 (OffHand)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>装备模板 (Base Item)</label>
-            <select id="makeItem"></select>
-          </div>
-          <div class="form-group">
-            <label>品质 (Rarity)</label>
-            <select id="makeRarity">
-              <option value="4">名器 (Rarity 4 · 金)</option>
-              <option value="3" selected>绝品 (Rarity 3 · 紫)</option>
-              <option value="2">精良 (Rarity 2 · 蓝)</option>
-              <option value="1">良好 (Rarity 1 · 绿)</option>
-              <option value="0">凡品 (Rarity 0 · 白)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="row-3">
-          <div class="form-group">
-            <label>主要材质 (Material)</label>
-            <select id="makeMaterial">
-              <option value="bintie" selected>镔铁 (Tier 5 · 花纹管制)</option>
-              <option value="jinggang">精钢百炼 (Tier 4)</option>
-              <option value="chaogang">炒钢 (Tier 3 · 基准)</option>
-              <option value="shutie">熟铁 (Tier 2)</option>
-              <option value="shengtie">生铁 (Tier 1)</option>
-              <option value="qingtong">青铜 (Tier 0)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>复合工艺 (Craft - 武器)</label>
-            <select id="makeCraft">
-              <option value="guangang" selected>灌钢 (P+1, 伤害+5%)</option>
-              <option value="baogang">包钢</option>
-              <option value="jiagang">夹钢</option>
-              <option value="">无</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>枪杆/柄材 (Shaft - 长枪)</label>
-            <select id="makeShaft">
-              <option value="jizhu" selected>积竹木柲 (命中+4, 耗体-2)</option>
-              <option value="baila">白蜡杆 (命中+2, 耗体-1)</option>
-              <option value="zaomu">枣木黄杨 (基准)</option>
-              <option value="zamu">杂木杨木</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="row-2">
-          <div class="form-group">
-            <label>防具材质升级 (Upgrade - 铠甲)</label>
-            <select id="makeUpgrade">
-              <option value="bintie" selected>镔铁加固 (减伤+3, 耐久+45)</option>
-              <option value="bailian">百炼精钢 (减伤+2, 耐久+30)</option>
-              <option value="jinggang">精钢加固 (减伤+1, 耐久+15)</option>
-              <option value="">无强化</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>箭矢类型 (Arrow - 弓)</label>
-            <select id="makeArrow">
-              <option value="pierce" selected>穿甲箭 (P+1, 穿透增强)</option>
-              <option value="heavy">重箭</option>
-              <option value="normal">普通箭</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- 装备栏与背包查看 -->
-    <div class="grid">
-      <!-- 已穿戴装备 -->
-      <div class="card">
-        <div class="card-title">
-          <span>🥋 当前已穿戴装备 (Equipped)</span>
-        </div>
-        <div id="equippedList" class="item-list"></div>
-      </div>
-
-      <!-- 背包列表 -->
-      <div class="card">
-        <div class="card-title">
-          <span>🎒 背包物品清单 (<span id="invCount">0</span> 件)</span>
-        </div>
-        <div id="invList" class="item-list"></div>
-      </div>
-    </div>
-
-    <!-- 原始存档 JSON 编辑器 -->
-    <div class="card">
-      <div class="card-title">
-        <span>📝 原始存档 GameState JSON 编辑与查看</span>
-        <div>
-          <button class="btn btn-secondary btn-sm" onclick="formatRawJson()">🔍 格式化</button>
-          <button class="btn btn-success btn-sm" onclick="saveRawJson()">💾 覆盖保存 JSON</button>
-        </div>
-      </div>
-      <textarea id="rawJsonText"></textarea>
-    </div>
-
-  </div>
-
-  <div id="toast" class="toast">操作成功</div>
-
-  <script>
-    let meta = { weapons: [], armors: [], shields: [] };
-    let curState = null;
-    let curPlayerId = '';
-
-    function showToast(msg, isError = false) {
-      const t = document.getElementById('toast');
-      t.innerText = msg;
-      t.className = isError ? 'toast show error' : 'toast show';
-      setTimeout(() => t.className = 'toast', 3000);
-    }
-
-    async function loadMeta() {
-      try {
-        const res = await fetch('/api/debug/items-meta');
-        const json = await res.json();
-        if (json.ok) {
-          meta = json.data;
-          onSlotChanged('weapon');
-        }
-      } catch (e) { console.error(e); }
-    }
-
-    function onSlotChanged(slot) {
-      const sel = document.getElementById('makeItem');
-      sel.innerHTML = '';
-      if (slot === 'weapon') {
-        meta.weapons.forEach(w => {
-          if (w.id === 'tushou') return;
-          const opt = document.createElement('option');
-          opt.value = w.id;
-          opt.innerText = \`\${w.name} (\${w.class} · 基础伤害 \${w.dmg})\`;
-          sel.appendChild(opt);
-        });
-      } else if (slot === 'body') {
-        meta.armors.forEach(a => {
-          const opt = document.createElement('option');
-          opt.value = a.id;
-          opt.innerText = \`\${a.name} (甲阶 A\${a.a} · 减伤 \${a.reduce})\`;
-          sel.appendChild(opt);
-        });
-      } else {
-        // offHand
-        meta.shields.forEach(s => {
-          const opt = document.createElement('option');
-          opt.value = s.id;
-          opt.innerText = \`[盾牌] \${s.name} (格挡 +\${s.block_mod*100}%)\`;
-          sel.appendChild(opt);
-        });
-        meta.weapons.filter(w => w.dual_allowed || w.class === 'blade').forEach(w => {
-          const opt = document.createElement('option');
-          opt.value = w.id;
-          opt.innerText = \`[双持副手] \${w.name}\`;
-          sel.appendChild(opt);
-        });
-      }
-    }
-
-    async function loadPlayers() {
-      try {
-        const res = await fetch('/api/debug/players');
-        const json = await res.json();
-        const sel = document.getElementById('playerSelect');
-        sel.innerHTML = '<option value="">-- 请选择玩家存档 --</option>';
-        if (json.ok && json.players) {
-          json.players.forEach(p => {
-            const opt = document.createElement('option');
-            opt.value = p.playerId;
-            opt.innerText = \`\${p.displayName} (Lv.\${p.level} · 铜钱 \${p.copper}) - ID: \${p.playerId.slice(0, 10)}...\`;
-            sel.appendChild(opt);
-          });
-          if (curPlayerId) sel.value = curPlayerId;
-        }
-      } catch (err) {
-        showToast('获取玩家列表失败', true);
-      }
-    }
-
-    async function loadPlayerData(id) {
-      if (!id) return;
-      curPlayerId = id;
-      try {
-        const res = await fetch(\`/api/debug/player/\${encodeURIComponent(id)}\`);
-        const json = await res.json();
-        if (json.ok && json.data?.state) {
-          curState = json.data.state;
-          renderDashboard();
-          showToast('存档加载成功');
-        } else {
-          showToast(json.error || '加载失败', true);
-        }
-      } catch (err) {
-        showToast('请求出错: ' + err.message, true);
-      }
-    }
-
-    function onPlayerSelected(id) {
-      if (id) loadPlayerData(id);
-    }
-
-    function loadPlayerManual() {
-      const id = document.getElementById('manualPlayerId').value.trim();
-      if (id) loadPlayerData(id);
-      else showToast('请输入 Player ID', true);
-    }
-
-    function renderDashboard() {
-      if (!curState) return;
-      document.getElementById('dashboard').style.display = 'block';
-
-      // 顶部
-      document.getElementById('curName').innerText = curState.player?.displayName || '无名好汉';
-      document.getElementById('curClass').innerText = curState.player?.classId || 'CLASS_A';
-      document.getElementById('curLevel').innerText = \`Lv.\${curState.player?.level || 1}\`;
-      document.getElementById('curId').innerText = \`ID: \${curPlayerId}\`;
-
-      // 资源
-      document.getElementById('resCopper').value = curState.resources?.copper ?? 0;
-      document.getElementById('resTokens').value = curState.resources?.tokens ?? 0;
-      document.getElementById('resHourglasses').value = curState.resources?.hourglasses ?? 0;
-      document.getElementById('resPrestige').value = curState.resources?.prestige ?? 0;
-
-      // 属性
-      document.getElementById('attrLevel').value = curState.player?.level ?? 1;
-      document.getElementById('attrExp').value = curState.player?.exp ?? 0;
-      document.getElementById('attrClass').value = curState.player?.classId ?? 'CLASS_A';
-      document.getElementById('attrStr').value = curState.attributes?.strength ?? 10;
-      document.getElementById('attrAgi').value = curState.attributes?.agility ?? 10;
-      document.getElementById('attrInt').value = curState.attributes?.intelligence ?? 10;
-      document.getElementById('attrCon').value = curState.attributes?.constitution ?? 10;
-      document.getElementById('attrLuk').value = curState.attributes?.luck ?? 10;
-
-      // 装备
-      renderEquipped();
-      renderInventory();
-
-      // 原始 JSON
-      document.getElementById('rawJsonText').value = JSON.stringify(curState, null, 2);
-    }
-
-    function renderEquipped() {
-      const el = document.getElementById('equippedList');
-      el.innerHTML = '';
-      const slots = [
-        { key: 'weapon', label: '主手兵刃' },
-        { key: 'offHand', label: '副手/盾牌' },
-        { key: 'body', label: '身穿甲胄' }
-      ];
-      slots.forEach(s => {
-        const item = curState.equipment?.equipped?.[s.key];
-        const row = document.createElement('div');
-        row.className = 'item-row';
-        if (item) {
-          row.innerHTML = \`
-            <div class="item-info">
-              <div><span class="badge">\${s.label}</span> <span class="item-name rarity-\${item.rarity || 0}">\${item.name}</span></div>
-              <div class="item-desc">\${item.description || ''}</div>
-            </div>
-            <div>
-              <button class="btn btn-danger btn-sm" onclick="removeItem('\${item.id}')">卸下</button>
-            </div>
-          \`;
-        } else {
-          row.innerHTML = \`
-            <div class="item-info">
-              <div><span class="badge">\${s.label}</span> <span style="color:var(--text-muted)">[未装备]</span></div>
-            </div>
-          \`;
-        }
-        el.appendChild(row);
-      });
-    }
-
-    function renderInventory() {
-      const el = document.getElementById('invList');
-      el.innerHTML = '';
-      const items = curState.inventory?.items || [];
-      document.getElementById('invCount').innerText = items.length;
-
-      if (items.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px">背包空空如也</div>';
-        return;
-      }
-
-      items.forEach(item => {
-        const row = document.createElement('div');
-        row.className = 'item-row';
-        row.innerHTML = \`
-          <div class="item-info">
-            <div><span class="badge">\${item.slot}</span> <span class="item-name rarity-\${item.rarity || 0}">\${item.name}</span></div>
-            <div class="item-desc">\${item.description || ''}</div>
-          </div>
-          <div style="display:flex;gap:4px">
-            <button class="btn btn-sm btn-success" onclick="equipFromInv('\${item.id}')">穿上</button>
-            <button class="btn btn-danger btn-sm" onclick="removeItem('\${item.id}')">删除</button>
-          </div>
-        \`;
-        el.appendChild(row);
-      });
-    }
-
-    function addRes(fieldId, count) {
-      const el = document.getElementById(fieldId);
-      el.value = (parseInt(el.value) || 0) + count;
-    }
-
-    function setAllStats(val) {
-      document.getElementById('attrStr').value = val;
-      document.getElementById('attrAgi').value = val;
-      document.getElementById('attrInt').value = val;
-      document.getElementById('attrCon').value = val;
-      document.getElementById('attrLuk').value = val;
-    }
-
-    async function saveResources() {
-      if (!curPlayerId) return;
-      const payload = {
-        copper: parseInt(document.getElementById('resCopper').value) || 0,
-        tokens: parseInt(document.getElementById('resTokens').value) || 0,
-        hourglasses: parseInt(document.getElementById('resHourglasses').value) || 0,
-        prestige: parseInt(document.getElementById('resPrestige').value) || 0,
-      };
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/resources\`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-      if (json.ok) {
-        showToast('资源保存成功');
-        loadPlayerData(curPlayerId);
-      } else showToast(json.error, true);
-    }
-
-    async function saveAttributes() {
-      if (!curPlayerId) return;
-      const payload = {
-        level: parseInt(document.getElementById('attrLevel').value) || 1,
-        exp: parseInt(document.getElementById('attrExp').value) || 0,
-        classId: document.getElementById('attrClass').value,
-        attributes: {
-          strength: parseInt(document.getElementById('attrStr').value) || 10,
-          agility: parseInt(document.getElementById('attrAgi').value) || 10,
-          intelligence: parseInt(document.getElementById('attrInt').value) || 10,
-          constitution: parseInt(document.getElementById('attrCon').value) || 10,
-          luck: parseInt(document.getElementById('attrLuk').value) || 10,
-        }
-      };
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/attributes\`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-      if (json.ok) {
-        showToast('属性修改成功');
-        loadPlayerData(curPlayerId);
-      } else showToast(json.error, true);
-    }
-
-    async function grantCustomItem(equipNow) {
-      if (!curPlayerId) return;
-      const payload = {
-        slot: document.getElementById('makeSlot').value,
-        itemId: document.getElementById('makeItem').value,
-        rarity: parseInt(document.getElementById('makeRarity').value) || 2,
-        material: document.getElementById('makeMaterial').value,
-        craft: document.getElementById('makeCraft').value || null,
-        shaft: document.getElementById('makeShaft').value || null,
-        upgrade: document.getElementById('makeUpgrade').value || null,
-        arrow: document.getElementById('makeArrow').value || null,
-        equipNow,
-      };
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/grant-item\`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-      if (json.ok) {
-        showToast(json.message);
-        loadPlayerData(curPlayerId);
-      } else showToast(json.error, true);
-    }
-
-    async function applyPreset(preset) {
-      if (!curPlayerId) return;
-      if (preset === 'clear_inventory' && !confirm('确定要清空此玩家背包吗？')) return;
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/grant-preset\`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preset })
-      });
-      const json = await res.json();
-      if (json.ok) {
-        showToast(json.message);
-        loadPlayerData(curPlayerId);
-      } else showToast(json.error, true);
-    }
-
-    async function removeItem(itemId) {
-      if (!curPlayerId) return;
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/item/\${encodeURIComponent(itemId)}\`, {
-        method: 'DELETE'
-      });
-      const json = await res.json();
-      if (json.ok) {
-        showToast('物品已移除');
-        loadPlayerData(curPlayerId);
-      } else showToast(json.error, true);
-    }
-
-    async function equipFromInv(itemId) {
-      if (!curPlayerId || !curState) return;
-      const item = curState.inventory?.items?.find(i => i.id === itemId);
-      if (!item) return;
-      // 穿戴
-      curState.equipment.equipped[item.slot] = item;
-      curState.inventory.items = curState.inventory.items.filter(i => i.id !== itemId);
-      saveRawJsonFromState();
-    }
-
-    async function resetCurPlayer() {
-      if (!curPlayerId) return;
-      if (!confirm('⚠️ 警告：确定要重置当前玩家的存档为初始状态吗？所有进度将丢失！')) return;
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/reset\`, { method: 'POST' });
-      const json = await res.json();
-      if (json.ok) {
-        showToast('存档已重置');
-        loadPlayerData(curPlayerId);
-      } else showToast(json.error, true);
-    }
-
-    function formatRawJson() {
-      try {
-        const obj = JSON.parse(document.getElementById('rawJsonText').value);
-        document.getElementById('rawJsonText').value = JSON.stringify(obj, null, 2);
-      } catch (e) { showToast('JSON 解析失败', true); }
-    }
-
-    async function saveRawJson() {
-      if (!curPlayerId) return;
-      try {
-        const rawState = JSON.parse(document.getElementById('rawJsonText').value);
-        const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/save-raw\`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rawState })
-        });
-        const json = await res.json();
-        if (json.ok) {
-          showToast('原始 JSON 存档已更新');
-          loadPlayerData(curPlayerId);
-        } else showToast(json.error, true);
-      } catch (e) { showToast('JSON 格式错误: ' + e.message, true); }
-    }
-
-    async function saveRawJsonFromState() {
-      if (!curPlayerId || !curState) return;
-      const res = await fetch(\`/api/debug/player/\${encodeURIComponent(curPlayerId)}/save-raw\`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rawState: curState })
-      });
-      const json = await res.json();
-      if (json.ok) {
-        showToast('装备更新成功');
-        loadPlayerData(curPlayerId);
-      }
-    }
-
-    // 初始化
-    loadMeta();
-    loadPlayers();
-  </script>
-</body>
-</html>`;
+  const html = "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>大宋造反模拟器 · 开发者控制台</title>\n  <style>\n    :root {\n      --bg: #0b0f19;\n      --card-bg: #151d30;\n      --card-border: #232f48;\n      --accent: #f59e0b;\n      --accent-hover: #d97706;\n      --text: #e2e8f0;\n      --text-muted: #94a3b8;\n      --success: #10b981;\n      --danger: #ef4444;\n      --cyan: #06b6d4;\n      --purple: #8b5cf6;\n      --blue: #3b82f6;\n    }\n    * { box-sizing: border-box; margin: 0; padding: 0; }\n    body {\n      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;\n      background: var(--bg);\n      color: var(--text);\n      line-height: 1.5;\n      padding: 20px;\n    }\n    .header {\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n      padding-bottom: 16px;\n      border-bottom: 1px solid var(--card-border);\n      margin-bottom: 16px;\n    }\n    .header h1 { font-size: 22px; color: var(--accent); display: flex; align-items: center; gap: 8px; }\n    .header .subtitle { font-size: 13px; color: var(--text-muted); }\n    \n    /* 顶部主导航 Tab */\n    .main-tabs {\n      display: flex;\n      gap: 8px;\n      margin-bottom: 20px;\n      border-bottom: 2px solid var(--card-border);\n      padding-bottom: 4px;\n    }\n    .main-tab-btn {\n      background: transparent;\n      border: none;\n      color: var(--text-muted);\n      font-size: 15px;\n      font-weight: 600;\n      padding: 10px 18px;\n      cursor: pointer;\n      border-radius: 6px 6px 0 0;\n      transition: all 0.2s;\n      display: flex;\n      align-items: center;\n      gap: 6px;\n    }\n    .main-tab-btn:hover {\n      color: var(--text);\n      background: rgba(255,255,255,0.05);\n    }\n    .main-tab-btn.active {\n      color: var(--accent);\n      background: var(--card-bg);\n      border-bottom: 2px solid var(--accent);\n      margin-bottom: -6px;\n    }\n\n    .tab-content { display: none; }\n    .tab-content.active { display: block; }\n\n    /* 通用栅格与卡片 */\n    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }\n    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }\n    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }\n    .card {\n      background: var(--card-bg);\n      border: 1px solid var(--card-border);\n      border-radius: 8px;\n      padding: 16px;\n      margin-bottom: 16px;\n    }\n    .card-title {\n      font-size: 15px;\n      font-weight: 600;\n      color: var(--accent);\n      margin-bottom: 12px;\n      display: flex;\n      align-items: center;\n      justify-content: space-between;\n    }\n    .form-group { margin-bottom: 12px; }\n    .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }\n    .form-row { display: flex; gap: 10px; align-items: center; }\n    \n    input, select, textarea {\n      width: 100%;\n      background: #0f1523;\n      border: 1px solid var(--card-border);\n      border-radius: 4px;\n      padding: 8px 10px;\n      color: var(--text);\n      font-size: 13px;\n      outline: none;\n      transition: border-color 0.2s;\n    }\n    input:focus, select:focus, textarea:focus { border-color: var(--accent); }\n    textarea { font-family: monospace; resize: vertical; }\n\n    .btn {\n      display: inline-flex;\n      align-items: center;\n      justify-content: center;\n      gap: 6px;\n      background: var(--accent);\n      color: #000;\n      font-weight: 600;\n      border: none;\n      border-radius: 4px;\n      padding: 8px 14px;\n      cursor: pointer;\n      font-size: 13px;\n      transition: all 0.2s;\n    }\n    .btn:hover { background: var(--accent-hover); }\n    .btn-secondary { background: #2d3748; color: #fff; }\n    .btn-secondary:hover { background: #4a5568; }\n    .btn-danger { background: var(--danger); color: #fff; }\n    .btn-danger:hover { background: #dc2626; }\n    .btn-success { background: var(--success); color: #000; }\n    .btn-success:hover { background: #059669; }\n    .btn-cyan { background: var(--cyan); color: #000; }\n    .btn-cyan:hover { background: #0891b2; }\n    .btn-purple { background: var(--purple); color: #fff; }\n    .btn-purple:hover { background: #7c3aed; }\n    .btn-sm { padding: 4px 8px; font-size: 12px; }\n\n    /* 表格 */\n    .table-container {\n      overflow-x: auto;\n      max-height: 600px;\n      border: 1px solid var(--card-border);\n      border-radius: 6px;\n      background: #0f1523;\n    }\n    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }\n    th {\n      background: #182238;\n      color: var(--accent);\n      padding: 10px;\n      font-weight: 600;\n      position: sticky;\n      top: 0;\n      z-index: 2;\n      border-bottom: 1px solid var(--card-border);\n      white-space: nowrap;\n    }\n    td {\n      padding: 8px 10px;\n      border-bottom: 1px solid rgba(255,255,255,0.05);\n      vertical-align: middle;\n      white-space: nowrap;\n    }\n    tr:hover { background: rgba(255,255,255,0.02); }\n    td input, td select {\n      padding: 4px 6px;\n      font-size: 12px;\n      background: #151d30;\n      min-width: 60px;\n    }\n\n    .badge {\n      display: inline-block;\n      padding: 2px 6px;\n      border-radius: 4px;\n      font-size: 11px;\n      font-weight: bold;\n      background: rgba(255,255,255,0.1);\n    }\n    .badge-cyan { background: rgba(6, 182, 212, 0.2); color: var(--cyan); border: 1px solid var(--cyan); }\n    .badge-amber { background: rgba(245, 158, 11, 0.2); color: var(--accent); border: 1px solid var(--accent); }\n    .badge-purple { background: rgba(139, 92, 246, 0.2); color: var(--purple); border: 1px solid var(--purple); }\n\n    /* 装备列表/物品条 */\n    .item-row {\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n      padding: 8px 10px;\n      border-bottom: 1px solid rgba(255,255,255,0.05);\n      background: rgba(0,0,0,0.15);\n      border-radius: 4px;\n      margin-bottom: 6px;\n    }\n    .item-info { display: flex; flex-direction: column; gap: 2px; }\n    .item-name { font-weight: bold; }\n    .item-desc { font-size: 11px; color: var(--text-muted); }\n    \n    .rarity-0 { color: #94a3b8; }\n    .rarity-1 { color: #10b981; }\n    .rarity-2 { color: #06b6d4; }\n    .rarity-3 { color: #a855f7; }\n    .rarity-4 { color: #f59e0b; font-weight: bold; }\n\n    .toast {\n      position: fixed;\n      bottom: 24px;\n      right: 24px;\n      background: var(--card-bg);\n      border: 1px solid var(--accent);\n      color: #fff;\n      padding: 12px 20px;\n      border-radius: 6px;\n      box-shadow: 0 10px 25px rgba(0,0,0,0.5);\n      display: none;\n      z-index: 9999;\n      font-size: 14px;\n    }\n    .player-bar {\n      display: flex;\n      gap: 12px;\n      align-items: center;\n      background: var(--card-bg);\n      border: 1px solid var(--card-border);\n      padding: 14px;\n      border-radius: 8px;\n      margin-bottom: 16px;\n    }\n  </style>\n</head>\n<body>\n\n  <!-- 头部 -->\n  <div class=\"header\">\n    <div>\n      <h1>⚔️ 大宋造反模拟器 · 开发者控制台</h1>\n      <div class=\"subtitle\">三才战斗数值体系 · 装备配置中心 · 版本快照与存档管理</div>\n    </div>\n    <div style=\"display: flex; gap: 10px;\">\n      <button class=\"btn btn-danger\" onclick=\"wipeAllSaves()\">🧨 全服一键清档</button>\n    </div>\n  </div>\n\n  <!-- 主导航 Tabs -->\n  <div class=\"main-tabs\">\n    <button class=\"main-tab-btn active\" onclick=\"switchMainTab('tab-saves')\">🎮 存档与作弊调试</button>\n    <button class=\"main-tab-btn\" onclick=\"switchMainTab('tab-config')\">🛠️ 装备与图标在线配置表</button>\n    <button class=\"main-tab-btn\" onclick=\"switchMainTab('tab-snapshots')\">📸 数值版本快照与回滚</button>\n  </div>\n\n  <!-- ==================== TAB 1: 存档与作弊调试 ==================== -->\n  <div id=\"tab-saves\" class=\"tab-content active\">\n    <!-- 玩家选择栏 -->\n    <div class=\"player-bar\">\n      <span style=\"font-weight: 600; color: var(--accent);\">选择目标玩家:</span>\n      <select id=\"playerSelect\" style=\"max-width: 380px;\" onchange=\"onPlayerChange()\">\n        <option value=\"\">加载玩家列表中...</option>\n      </select>\n      <button class=\"btn btn-secondary btn-sm\" onclick=\"loadPlayers()\">🔄 刷新列表</button>\n      <span id=\"playerStatus\" style=\"font-size: 13px; color: var(--cyan); margin-left: auto;\"></span>\n      <button class=\"btn btn-danger btn-sm\" onclick=\"resetCurPlayer()\">⚠️ 重置当前玩家为初始</button>\n    </div>\n\n    <!-- 快捷预设作弊栏 -->\n    <div class=\"card\">\n      <div class=\"card-title\">⚡ 一键极速作弊预设 (针对当前选中玩家)</div>\n      <div style=\"display: flex; gap: 10px; flex-wrap: wrap;\">\n        <button class=\"btn btn-cyan btn-sm\" onclick=\"applyPreset('max_resources')\">💰 资源暴富 (千万铜钱/万抽)</button>\n        <button class=\"btn btn-purple btn-sm\" onclick=\"applyPreset('max_level_stats')\">🌟 满级真神 (80级 + 全属性999)</button>\n        <button class=\"btn btn-success btn-sm\" onclick=\"applyPreset('god_gear_blade')\">🗡️ 神装：双持柳叶镔铁双刀+明光铠</button>\n        <button class=\"btn btn-success btn-sm\" onclick=\"applyPreset('god_gear_spear')\">🔱 神装：百炼大枪+明光铠</button>\n        <button class=\"btn btn-success btn-sm\" onclick=\"applyPreset('god_gear_blunt')\">🔨 神装：重装骨朵锤+藤牌+锁子甲</button>\n        <button class=\"btn btn-secondary btn-sm\" onclick=\"applyPreset('all_weapons')\">🎒 赠送全套武器 (各一把)</button>\n        <button class=\"btn btn-secondary btn-sm\" onclick=\"applyPreset('all_armors')\">🛡️ 赠送全套铠甲与盾牌</button>\n        <button class=\"btn btn-danger btn-sm\" onclick=\"applyPreset('clear_inventory')\">🗑️ 清空背包</button>\n      </div>\n    </div>\n\n    <div class=\"grid-2\">\n      <!-- 资源修改 -->\n      <div class=\"card\">\n        <div class=\"card-title\">💰 基础资源修改</div>\n        <div class=\"grid-2\">\n          <div class=\"form-group\">\n            <label>铜钱 (Copper):</label>\n            <input type=\"number\" id=\"resCopper\" value=\"0\">\n            <div style=\"margin-top:4px; display:flex; gap:4px;\">\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resCopper', 10000)\">+1万</button>\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resCopper', 1000000)\">+100万</button>\n            </div>\n          </div>\n          <div class=\"form-group\">\n            <label>代币/令箭 (Tokens):</label>\n            <input type=\"number\" id=\"resTokens\" value=\"0\">\n            <div style=\"margin-top:4px; display:flex; gap:4px;\">\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resTokens', 100)\">+100</button>\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resTokens', 1000)\">+1000</button>\n            </div>\n          </div>\n          <div class=\"form-group\">\n            <label>沙漏/加速券 (Hourglasses):</label>\n            <input type=\"number\" id=\"resHourglasses\" value=\"0\">\n            <div style=\"margin-top:4px; display:flex; gap:4px;\">\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resHourglasses', 50)\">+50</button>\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resHourglasses', 500)\">+500</button>\n            </div>\n          </div>\n          <div class=\"form-group\">\n            <label>声望 (Prestige):</label>\n            <input type=\"number\" id=\"resPrestige\" value=\"0\">\n            <div style=\"margin-top:4px; display:flex; gap:4px;\">\n              <button class=\"btn btn-secondary btn-sm\" onclick=\"addRes('resPrestige', 1000)\">+1000</button>\n            </div>\n          </div>\n        </div>\n        <button class=\"btn btn-accent\" style=\"width:100%; margin-top:10px;\" onclick=\"saveResources()\">💾 保存资源数值</button>\n      </div>\n\n      <!-- 等级与五维属性 -->\n      <div class=\"card\">\n        <div class=\"card-title\">🥋 角色等级与五维属性</div>\n        <div class=\"grid-3\">\n          <div class=\"form-group\">\n            <label>等级 (Level):</label>\n            <input type=\"number\" id=\"attrLevel\" min=\"1\" max=\"100\" value=\"1\">\n          </div>\n          <div class=\"form-group\">\n            <label>经验值 (Exp):</label>\n            <input type=\"number\" id=\"attrExp\" value=\"0\">\n          </div>\n          <div class=\"form-group\">\n            <label>流派 (Class):</label>\n            <select id=\"attrClass\">\n              <option value=\"CLASS_A\">猛将 (猛力型)</option>\n              <option value=\"CLASS_B\">游侠 (灵动型)</option>\n              <option value=\"CLASS_C\">军策 (谋略型)</option>\n              <option value=\"CLASS_D\">义士 (坚忍型)</option>\n            </select>\n          </div>\n        </div>\n        <div class=\"grid-3\">\n          <div class=\"form-group\">\n            <label>力量 (Strength):</label>\n            <input type=\"number\" id=\"attrStr\" value=\"10\">\n          </div>\n          <div class=\"form-group\">\n            <label>敏捷 (Agility):</label>\n            <input type=\"number\" id=\"attrAgi\" value=\"10\">\n          </div>\n          <div class=\"form-group\">\n            <label>智力 (Intelligence):</label>\n            <input type=\"number\" id=\"attrInt\" value=\"10\">\n          </div>\n          <div class=\"form-group\">\n            <label>体魄 (Constitution):</label>\n            <input type=\"number\" id=\"attrCon\" value=\"10\">\n          </div>\n          <div class=\"form-group\">\n            <label>机缘 (Luck):</label>\n            <input type=\"number\" id=\"attrLuk\" value=\"10\">\n          </div>\n          <div class=\"form-group\" style=\"display:flex; align-items:flex-end;\">\n            <button class=\"btn btn-secondary btn-sm\" style=\"width:100%; height:35px;\" onclick=\"setAllStats(100)\">全设为 100</button>\n          </div>\n        </div>\n        <button class=\"btn btn-accent\" style=\"width:100%; margin-top:10px;\" onclick=\"saveAttributes()\">💾 保存属性数值</button>\n      </div>\n    </div>\n\n    <!-- 自定义装备生成与发放 -->\n    <div class=\"card\">\n      <div class=\"card-title\">🎁 自定义指定装备/词条发放</div>\n      <div class=\"grid-4\">\n        <div class=\"form-group\">\n          <label>装备部位 (Slot):</label>\n          <select id=\"makeSlot\" onchange=\"onMakeSlotChange()\">\n            <option value=\"weapon\">主手武器 (Weapon)</option>\n            <option value=\"offHand\">副手 (盾牌 / 短兵双持)</option>\n            <option value=\"body\">护甲 (Body Armor)</option>\n          </select>\n        </div>\n        <div class=\"form-group\">\n          <label>基础品类 (Base Item):</label>\n          <select id=\"makeItem\" onchange=\"onMakeItemChange()\"></select>\n        </div>\n        <div class=\"form-group\">\n          <label>品质稀有度 (Rarity):</label>\n          <select id=\"makeRarity\">\n            <option value=\"0\">凡品 (白色 0)</option>\n            <option value=\"1\">良品 (绿色 1)</option>\n            <option value=\"2\" selected>精品 (蓝色 2)</option>\n            <option value=\"3\">名器 (紫色 3)</option>\n            <option value=\"4\">传世神兵 (金橙色 4)</option>\n          </select>\n        </div>\n        <div class=\"form-group\" id=\"groupMaterial\">\n          <label>金属/材质 (Material):</label>\n          <select id=\"makeMaterial\"></select>\n        </div>\n      </div>\n      <div class=\"grid-4\">\n        <div class=\"form-group\" id=\"groupCraft\">\n          <label>锻造工艺 (Craft):</label>\n          <select id=\"makeCraft\">\n            <option value=\"\">无特殊工艺</option>\n            <option value=\"guangang\">灌钢 (破甲+1, 伤害+10%)</option>\n            <option value=\"cuiri\">淬日 (暴击伤害提升)</option>\n            <option value=\"bailian\">百炼 (基础数值提升)</option>\n          </select>\n        </div>\n        <div class=\"form-group\" id=\"groupShaft\">\n          <label>枪柄木料 (Spear Shaft):</label>\n          <select id=\"makeShaft\"></select>\n        </div>\n        <div class=\"form-group\" id=\"groupUpgrade\">\n          <label>护甲甲片淬炼 (Armor Upgrade):</label>\n          <select id=\"makeUpgrade\"></select>\n        </div>\n        <div class=\"form-group\" id=\"groupArrow\">\n          <label>箭矢类型 (Arrow Type):</label>\n          <select id=\"makeArrow\"></select>\n        </div>\n      </div>\n      <div style=\"display:flex; gap:10px; justify-content:flex-end;\">\n        <button class=\"btn btn-secondary\" onclick=\"grantCustomItem(false)\">📥 放入背包</button>\n        <button class=\"btn btn-success\" onclick=\"grantCustomItem(true)\">⚡ 直接穿戴到角色身上</button>\n      </div>\n    </div>\n\n    <!-- 当前穿戴与背包 -->\n    <div class=\"grid-2\">\n      <div class=\"card\">\n        <div class=\"card-title\">🛡️ 当前穿戴的装备 (Equipped)</div>\n        <div id=\"equippedContainer\">\n          <div style=\"color:var(--text-muted); font-size:13px;\">请选择玩家查看穿戴情况</div>\n        </div>\n      </div>\n      <div class=\"card\">\n        <div class=\"card-title\">🎒 玩家背包物品列表 (Inventory)</div>\n        <div id=\"inventoryContainer\" style=\"max-height: 380px; overflow-y: auto;\">\n          <div style=\"color:var(--text-muted); font-size:13px;\">请选择玩家查看背包</div>\n        </div>\n      </div>\n    </div>\n\n    <!-- 原始 GameState JSON 编辑器 -->\n    <div class=\"card\">\n      <div class=\"card-title\">\n        <span>📝 原始 GameState 存档 JSON 编辑</span>\n        <button class=\"btn btn-secondary btn-sm\" onclick=\"formatRawJson()\">格式化 JSON</button>\n      </div>\n      <textarea id=\"rawJsonText\" rows=\"12\" style=\"font-size:12px;\"></textarea>\n      <div style=\"display:flex; justify-content:flex-end; gap:10px; margin-top:10px;\">\n        <button class=\"btn btn-accent\" onclick=\"saveRawJson()\">💾 覆盖保存原始 JSON 存档</button>\n      </div>\n    </div>\n  </div>\n\n  <!-- ==================== TAB 2: 装备数值与图标在线配置表 ==================== -->\n  <div id=\"tab-config\" class=\"tab-content\">\n    <div class=\"card\">\n      <div class=\"card-title\" style=\"margin-bottom:0;\">\n        <div style=\"display:flex; align-items:center; gap:12px;\">\n          <span>🛠️ 装备数值与图标在线配置表</span>\n          <div style=\"display:flex; gap:4px; font-size:13px;\">\n            <button class=\"btn btn-secondary btn-sm\" id=\"subtab-w\" onclick=\"switchConfigSubTab('weapons')\">🗡️ 武器配置 (Weapons)</button>\n            <button class=\"btn btn-secondary btn-sm\" id=\"subtab-a\" onclick=\"switchConfigSubTab('armors')\">🛡️ 防具配置 (Armors)</button>\n            <button class=\"btn btn-secondary btn-sm\" id=\"subtab-s\" onclick=\"switchConfigSubTab('shields')\">🔰 盾牌配置 (Shields)</button>\n            <button class=\"btn btn-secondary btn-sm\" id=\"subtab-raw\" onclick=\"switchConfigSubTab('raw')\">📋 完整配置 JSON</button>\n          </div>\n        </div>\n        <div style=\"display:flex; gap:8px;\">\n          <button class=\"btn btn-cyan btn-sm\" onclick=\"addRowCurrentSubTab()\">➕ 新增一行</button>\n          <button class=\"btn btn-secondary btn-sm\" onclick=\"loadEquipmentConfig()\">🔄 重新读取</button>\n          <button class=\"btn btn-success btn-sm\" onclick=\"saveEquipmentConfig()\">💾 保存并实时热重载</button>\n        </div>\n      </div>\n    </div>\n\n    <!-- 武器配置子表格 -->\n    <div id=\"subview-weapons\" class=\"card\" style=\"padding:0;\">\n      <div class=\"table-container\">\n        <table id=\"tableWeapons\">\n          <thead>\n            <tr>\n              <th style=\"width:120px;\">武器 ID</th>\n              <th style=\"width:130px;\">武器名称</th>\n              <th style=\"width:180px; color:var(--cyan);\">客户端图标 (iconId)</th>\n              <th style=\"width:100px;\">兵器类型</th>\n              <th style=\"width:70px;\">伤害</th>\n              <th style=\"width:70px;\">攻速</th>\n              <th style=\"width:70px;\">耗体</th>\n              <th style=\"width:70px;\">命中%</th>\n              <th style=\"width:70px;\">破甲修正</th>\n              <th style=\"width:70px;\">固定破甲</th>\n              <th style=\"width:70px;\">双手</th>\n              <th style=\"width:70px;\">可副手</th>\n              <th style=\"width:70px;\">先攻</th>\n              <th style=\"width:70px;\">连击</th>\n              <th style=\"width:70px;\">击退</th>\n              <th style=\"width:70px;\">眩晕</th>\n              <th style=\"width:80px;\">操作</th>\n            </tr>\n          </thead>\n          <tbody></tbody>\n        </table>\n      </div>\n    </div>\n\n    <!-- 防具配置子表格 -->\n    <div id=\"subview-armors\" class=\"card\" style=\"padding:0; display:none;\">\n      <div class=\"table-container\">\n        <table id=\"tableArmors\">\n          <thead>\n            <tr>\n              <th style=\"width:120px;\">护甲 ID</th>\n              <th style=\"width:140px;\">护甲名称</th>\n              <th style=\"width:180px; color:var(--cyan);\">客户端图标 (iconId)</th>\n              <th style=\"width:80px;\">防护等级 (A)</th>\n              <th style=\"width:80px;\">减伤值</th>\n              <th style=\"width:80px;\">体力上限</th>\n              <th style=\"width:80px;\">闪避加成%</th>\n              <th style=\"width:80px;\">回体速率</th>\n              <th style=\"width:80px;\">基础耐久</th>\n              <th style=\"width:80px;\">磨损率</th>\n              <th style=\"width:140px;\">特殊特性 (Trait)</th>\n              <th style=\"width:80px;\">操作</th>\n            </tr>\n          </thead>\n          <tbody></tbody>\n        </table>\n      </div>\n    </div>\n\n    <!-- 盾牌配置子表格 -->\n    <div id=\"subview-shields\" class=\"card\" style=\"padding:0; display:none;\">\n      <div class=\"table-container\">\n        <table id=\"tableShields\">\n          <thead>\n            <tr>\n              <th style=\"width:130px;\">盾牌 ID</th>\n              <th style=\"width:150px;\">盾牌名称</th>\n              <th style=\"width:180px; color:var(--cyan);\">客户端图标 (iconId)</th>\n              <th style=\"width:100px;\">格挡加成 (0~1)</th>\n              <th style=\"width:100px;\">格挡耗体修正</th>\n              <th style=\"width:100px;\">闪避修正</th>\n              <th style=\"width:80px;\">操作</th>\n            </tr>\n          </thead>\n          <tbody></tbody>\n        </table>\n      </div>\n    </div>\n\n    <!-- 完整 JSON 编辑 -->\n    <div id=\"subview-raw\" class=\"card\" style=\"display:none;\">\n      <div style=\"margin-bottom:10px; color:var(--text-muted); font-size:13px;\">\n        可直接编辑 <code>equipment_data.json</code> 的完整定义（含材料、升级词条等），点击保存后自动校验并热重载。\n      </div>\n      <textarea id=\"equipmentRawJson\" rows=\"18\"></textarea>\n      <div style=\"display:flex; justify-content:flex-end; gap:10px; margin-top:10px;\">\n        <button class=\"btn btn-secondary\" onclick=\"formatConfigJson()\">格式化 JSON</button>\n        <button class=\"btn btn-success\" onclick=\"saveEquipmentConfigFromRaw()\">💾 保存并生效</button>\n      </div>\n    </div>\n  </div>\n\n  <!-- ==================== TAB 3: 数值版本快照与回滚 ==================== -->\n  <div id=\"tab-snapshots\" class=\"tab-content\">\n    <div class=\"card\">\n      <div class=\"card-title\">📸 备份当前数值配置为新快照</div>\n      <div class=\"form-row\">\n        <input type=\"text\" id=\"snapNote\" placeholder=\"填写本次快照备注 (例如: 调高双手刀破甲数值并绑定正确的客户端图标)\" style=\"flex:1;\">\n        <button class=\"btn btn-purple\" onclick=\"createSnapshotBackup()\">📸 创建数值快照备份</button>\n      </div>\n    </div>\n\n    <div class=\"card\" style=\"padding:0;\">\n      <div style=\"padding:14px 16px; border-bottom:1px solid var(--card-border); display:flex; justify-content:space-between; align-items:center;\">\n        <span style=\"font-weight:600; color:var(--accent);\">📜 历史配置版本快照列表 (可随时一键回滚)</span>\n        <button class=\"btn btn-secondary btn-sm\" onclick=\"loadSnapshots()\">🔄 刷新快照列表</button>\n      </div>\n      <div class=\"table-container\">\n        <table id=\"tableSnapshots\">\n          <thead>\n            <tr>\n              <th style=\"width:200px;\">快照标识 (ID)</th>\n              <th style=\"width:280px;\">备份说明 / 备注</th>\n              <th style=\"width:160px;\">创建时间</th>\n              <th style=\"width:100px;\">兵器数</th>\n              <th style=\"width:100px;\">护甲数</th>\n              <th style=\"width:100px;\">文件大小</th>\n              <th style=\"width:180px;\">操作</th>\n            </tr>\n          </thead>\n          <tbody>\n            <tr><td colspan=\"7\" style=\"text-align:center; color:var(--text-muted); padding:20px;\">正在读取快照数据...</td></tr>\n          </tbody>\n        </table>\n      </div>\n    </div>\n  </div>\n\n  <!-- Toast 弹窗 -->\n  <div id=\"toast\" class=\"toast\"></div>\n\n  <script>\n    let curPlayerId = '';\n    let curState = null;\n    let meta = null;\n    let cachedEquipmentData = null;\n    let currentConfigSubTab = 'weapons';\n\n    function showToast(msg, isError = false) {\n      const t = document.getElementById('toast');\n      t.innerText = msg;\n      t.style.borderColor = isError ? 'var(--danger)' : 'var(--accent)';\n      t.style.display = 'block';\n      setTimeout(() => { t.style.display = 'none'; }, 3500);\n    }\n\n    // 页面主 Tab 切换\n    function switchMainTab(tabId) {\n      document.querySelectorAll('.main-tab-btn').forEach(btn => btn.classList.remove('active'));\n      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));\n      \n      const target = document.getElementById(tabId);\n      if (target) target.classList.add('active');\n      event.currentTarget.classList.add('active');\n\n      if (tabId === 'tab-config') {\n        loadEquipmentConfig();\n      } else if (tabId === 'tab-snapshots') {\n        loadSnapshots();\n      }\n    }\n\n    // 配置子 Tab 切换\n    function switchConfigSubTab(sub) {\n      currentConfigSubTab = sub;\n      ['w', 'a', 's', 'raw'].forEach(k => {\n        const btn = document.getElementById('subtab-' + k);\n        if (btn) btn.classList.remove('btn-accent');\n      });\n      ['weapons', 'armors', 'shields', 'raw'].forEach(k => {\n        const view = document.getElementById('subview-' + k);\n        if (view) view.style.display = 'none';\n      });\n\n      const activeBtnMap = { weapons: 'subtab-w', armors: 'subtab-a', shields: 'subtab-s', raw: 'subtab-raw' };\n      document.getElementById(activeBtnMap[sub])?.classList.add('btn-accent');\n      document.getElementById('subview-' + sub).style.display = 'block';\n    }\n\n    // ==========================================\n    // TAB 1: 存档与作弊逻辑\n    // ==========================================\n    async function loadMeta() {\n      const res = await fetch('/api/debug/items-meta');\n      const json = await res.json();\n      if (json.ok) {\n        meta = json.data;\n        initMakeDropdowns();\n      }\n    }\n\n    function initMakeDropdowns() {\n      if (!meta) return;\n      // 材质\n      const matSel = document.getElementById('makeMaterial');\n      matSel.innerHTML = meta.materials.map(m => `<option value=\"${m.id}\">${m.name} (T${m.tier} 倍率${m.dmg_scale})</option>`).join('');\n      // 枪柄\n      const shaftSel = document.getElementById('makeShaft');\n      shaftSel.innerHTML = '<option value=\"\">默认普通木柄</option>' + meta.shaftMaterials.map(s => `<option value=\"${s.id}\">${s.name}</option>`).join('');\n      // 甲片\n      const upSel = document.getElementById('makeUpgrade');\n      upSel.innerHTML = '<option value=\"\">无淬炼附加</option>' + meta.armorMaterialUpgrades.map(u => `<option value=\"${u.id}\">${u.name} (减伤+${u.reduce_mod})</option>`).join('');\n      // 箭矢\n      const arrSel = document.getElementById('makeArrow');\n      arrSel.innerHTML = meta.arrows.map(a => `<option value=\"${a.id}\">${a.name}</option>`).join('');\n\n      onMakeSlotChange();\n    }\n\n    function onMakeSlotChange() {\n      const slot = document.getElementById('makeSlot').value;\n      const itemSel = document.getElementById('makeItem');\n      if (!meta) return;\n\n      if (slot === 'weapon') {\n        itemSel.innerHTML = meta.weapons.map(w => `<option value=\"${w.id}\">${w.name} (${w.class}, 伤${w.dmg})</option>`).join('');\n        document.getElementById('groupMaterial').style.display = 'block';\n        document.getElementById('groupCraft').style.display = 'block';\n        document.getElementById('groupShaft').style.display = 'block';\n        document.getElementById('groupUpgrade').style.display = 'none';\n        document.getElementById('groupArrow').style.display = 'block';\n      } else if (slot === 'body') {\n        itemSel.innerHTML = meta.armors.map(a => `<option value=\"${a.id}\">${a.name} (A${a.a}, 减伤${a.reduce})</option>`).join('');\n        document.getElementById('groupMaterial').style.display = 'none';\n        document.getElementById('groupCraft').style.display = 'none';\n        document.getElementById('groupShaft').style.display = 'none';\n        document.getElementById('groupUpgrade').style.display = 'block';\n        document.getElementById('groupArrow').style.display = 'none';\n      } else {\n        // offHand: 盾牌 + 短兵\n        const dualWeapons = meta.weapons.filter(w => w.dual_allowed);\n        let opts = '<optgroup label=\"盾牌\">';\n        opts += meta.shields.map(s => `<option value=\"${s.id}\">${s.name} (格挡+${Math.round(s.block_mod*100)}%)</option>`).join('');\n        opts += '</optgroup><optgroup label=\"可双持副手兵刃\">';\n        opts += dualWeapons.map(w => `<option value=\"${w.id}\">${w.name} (${w.class})</option>`).join('');\n        opts += '</optgroup>';\n        itemSel.innerHTML = opts;\n        document.getElementById('groupMaterial').style.display = 'block';\n        document.getElementById('groupCraft').style.display = 'block';\n        document.getElementById('groupShaft').style.display = 'none';\n        document.getElementById('groupUpgrade').style.display = 'none';\n        document.getElementById('groupArrow').style.display = 'none';\n      }\n    }\n\n    function onMakeItemChange() {}\n\n    async function loadPlayers() {\n      const select = document.getElementById('playerSelect');\n      select.innerHTML = '<option value=\"\">加载中...</option>';\n      try {\n        const res = await fetch('/api/debug/players');\n        const json = await res.json();\n        if (json.ok && json.players.length > 0) {\n          select.innerHTML = json.players.map(p => \n            `<option value=\"${p.playerId}\">${p.displayName} (Lv.${p.level} / 铜钱:${p.copper}) - ${p.playerId.slice(0, 8)}...</option>`\n          ).join('');\n          curPlayerId = json.players[0].playerId;\n          loadPlayerData(curPlayerId);\n        } else {\n          select.innerHTML = '<option value=\"\">暂无玩家存档 (请先在游戏客户端登录创建)</option>';\n        }\n      } catch (e) {\n        select.innerHTML = '<option value=\"\">加载玩家失败</option>';\n      }\n    }\n\n    function onPlayerChange() {\n      curPlayerId = document.getElementById('playerSelect').value;\n      if (curPlayerId) loadPlayerData(curPlayerId);\n    }\n\n    async function loadPlayerData(playerId) {\n      document.getElementById('playerStatus').innerText = '正在加载存档...';\n      try {\n        const res = await fetch(`/api/debug/player/${encodeURIComponent(playerId)}`);\n        const json = await res.json();\n        if (json.ok) {\n          curState = json.data.state;\n          renderPlayerState(curState);\n          document.getElementById('playerStatus').innerText = '存档读取就绪';\n        } else {\n          document.getElementById('playerStatus').innerText = '读取失败: ' + json.error;\n        }\n      } catch (e) {\n        document.getElementById('playerStatus').innerText = '网络异常';\n      }\n    }\n\n    function renderPlayerState(state) {\n      document.getElementById('resCopper').value = state.resources?.copper || 0;\n      document.getElementById('resTokens').value = state.resources?.tokens || 0;\n      document.getElementById('resHourglasses').value = state.resources?.hourglasses || 0;\n      document.getElementById('resPrestige').value = state.resources?.prestige || 0;\n\n      document.getElementById('attrLevel').value = state.player?.level || 1;\n      document.getElementById('attrExp').value = state.player?.exp || 0;\n      document.getElementById('attrClass').value = state.player?.classId || 'CLASS_A';\n\n      document.getElementById('attrStr').value = state.attributes?.strength || 10;\n      document.getElementById('attrAgi').value = state.attributes?.agility || 10;\n      document.getElementById('attrInt').value = state.attributes?.intelligence || 10;\n      document.getElementById('attrCon').value = state.attributes?.constitution || 10;\n      document.getElementById('attrLuk').value = state.attributes?.luck || 10;\n\n      renderEquipped(state.equipment?.equipped || {});\n      renderInventory(state.inventory?.items || []);\n\n      document.getElementById('rawJsonText').value = JSON.stringify(state, null, 2);\n    }\n\n    function renderEquipped(equipped) {\n      const el = document.getElementById('equippedContainer');\n      el.innerHTML = '';\n      const slots = [\n        { key: 'weapon', label: '主手武器 (weapon)' },\n        { key: 'offHand', label: '副手装备 (offHand)' },\n        { key: 'body', label: '护甲身防 (body)' }\n      ];\n\n      slots.forEach(s => {\n        const item = equipped[s.key];\n        const row = document.createElement('div');\n        row.className = 'item-row';\n        if (item) {\n          row.innerHTML = `\n            <div class=\"item-info\">\n              <div><span class=\"badge badge-amber\">${s.label}</span> <span class=\"item-name rarity-${item.rarity || 0}\">${item.name}</span></div>\n              <div class=\"item-desc\">${item.description || ''}</div>\n            </div>\n            <button class=\"btn btn-danger btn-sm\" onclick=\"removeItem('${item.id}')\">卸下</button>\n          `;\n        } else {\n          row.innerHTML = `\n            <div class=\"item-info\">\n              <div><span class=\"badge\">${s.label}</span> <span style=\"color:var(--text-muted); font-size:12px;\">(空)</span></div>\n            </div>\n          `;\n        }\n        el.appendChild(row);\n      });\n    }\n\n    function renderInventory(items) {\n      const el = document.getElementById('inventoryContainer');\n      el.innerHTML = '';\n      if (!items || items.length === 0) {\n        el.innerHTML = '<div style=\"color:var(--text-muted); font-size:13px; padding:10px;\">背包空空如也</div>';\n        return;\n      }\n      items.forEach(item => {\n        const row = document.createElement('div');\n        row.className = 'item-row';\n        row.innerHTML = `\n          <div class=\"item-info\">\n            <div><span class=\"badge\">${item.slot}</span> <span class=\"item-name rarity-${item.rarity || 0}\">${item.name}</span></div>\n            <div class=\"item-desc\">${item.description || ''}</div>\n          </div>\n          <div style=\"display:flex;gap:4px\">\n            <button class=\"btn btn-sm btn-success\" onclick=\"equipFromInv('${item.id}')\">穿上</button>\n            <button class=\"btn btn-danger btn-sm\" onclick=\"removeItem('${item.id}')\">删除</button>\n          </div>\n        `;\n        el.appendChild(row);\n      });\n    }\n\n    function addRes(fieldId, count) {\n      const el = document.getElementById(fieldId);\n      el.value = (parseInt(el.value) || 0) + count;\n    }\n\n    function setAllStats(val) {\n      document.getElementById('attrStr').value = val;\n      document.getElementById('attrAgi').value = val;\n      document.getElementById('attrInt').value = val;\n      document.getElementById('attrCon').value = val;\n      document.getElementById('attrLuk').value = val;\n    }\n\n    async function saveResources() {\n      if (!curPlayerId) return;\n      const payload = {\n        copper: parseInt(document.getElementById('resCopper').value) || 0,\n        tokens: parseInt(document.getElementById('resTokens').value) || 0,\n        hourglasses: parseInt(document.getElementById('resHourglasses').value) || 0,\n        prestige: parseInt(document.getElementById('resPrestige').value) || 0,\n      };\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/resources`, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(payload)\n      });\n      const json = await res.json();\n      if (json.ok) {\n        showToast('资源保存成功');\n        loadPlayerData(curPlayerId);\n      } else showToast(json.error, true);\n    }\n\n    async function saveAttributes() {\n      if (!curPlayerId) return;\n      const payload = {\n        level: parseInt(document.getElementById('attrLevel').value) || 1,\n        exp: parseInt(document.getElementById('attrExp').value) || 0,\n        classId: document.getElementById('attrClass').value,\n        attributes: {\n          strength: parseInt(document.getElementById('attrStr').value) || 10,\n          agility: parseInt(document.getElementById('attrAgi').value) || 10,\n          intelligence: parseInt(document.getElementById('attrInt').value) || 10,\n          constitution: parseInt(document.getElementById('attrCon').value) || 10,\n          luck: parseInt(document.getElementById('attrLuk').value) || 10,\n        }\n      };\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/attributes`, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(payload)\n      });\n      const json = await res.json();\n      if (json.ok) {\n        showToast('属性修改成功');\n        loadPlayerData(curPlayerId);\n      } else showToast(json.error, true);\n    }\n\n    async function grantCustomItem(equipNow) {\n      if (!curPlayerId) return;\n      const payload = {\n        slot: document.getElementById('makeSlot').value,\n        itemId: document.getElementById('makeItem').value,\n        rarity: parseInt(document.getElementById('makeRarity').value) || 2,\n        material: document.getElementById('makeMaterial').value,\n        craft: document.getElementById('makeCraft').value || null,\n        shaft: document.getElementById('makeShaft').value || null,\n        upgrade: document.getElementById('makeUpgrade').value || null,\n        arrow: document.getElementById('makeArrow').value || null,\n        equipNow,\n      };\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/grant-item`, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify(payload)\n      });\n      const json = await res.json();\n      if (json.ok) {\n        showToast(json.message);\n        loadPlayerData(curPlayerId);\n      } else showToast(json.error, true);\n    }\n\n    async function applyPreset(preset) {\n      if (!curPlayerId) return;\n      if (preset === 'clear_inventory' && !confirm('确定要清空此玩家背包吗？')) return;\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/grant-preset`, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ preset })\n      });\n      const json = await res.json();\n      if (json.ok) {\n        showToast(json.message);\n        loadPlayerData(curPlayerId);\n      } else showToast(json.error, true);\n    }\n\n    async function removeItem(itemId) {\n      if (!curPlayerId) return;\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/item/${encodeURIComponent(itemId)}`, {\n        method: 'DELETE'\n      });\n      const json = await res.json();\n      if (json.ok) {\n        showToast('物品已移除');\n        loadPlayerData(curPlayerId);\n      } else showToast(json.error, true);\n    }\n\n    async function equipFromInv(itemId) {\n      if (!curPlayerId || !curState) return;\n      const item = curState.inventory?.items?.find(i => i.id === itemId);\n      if (!item) return;\n      curState.equipment.equipped[item.slot] = item;\n      curState.inventory.items = curState.inventory.items.filter(i => i.id !== itemId);\n      saveRawJsonFromState();\n    }\n\n    async function resetCurPlayer() {\n      if (!curPlayerId) return;\n      if (!confirm('⚠️ 警告：确定要重置当前玩家的存档为初始状态吗？所有进度将丢失！')) return;\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/reset`, { method: 'POST' });\n      const json = await res.json();\n      if (json.ok) {\n        showToast('存档已重置');\n        loadPlayerData(curPlayerId);\n      } else showToast(json.error, true);\n    }\n\n    function formatRawJson() {\n      try {\n        const obj = JSON.parse(document.getElementById('rawJsonText').value);\n        document.getElementById('rawJsonText').value = JSON.stringify(obj, null, 2);\n      } catch (e) { showToast('JSON 解析失败', true); }\n    }\n\n    async function saveRawJson() {\n      if (!curPlayerId) return;\n      try {\n        const rawState = JSON.parse(document.getElementById('rawJsonText').value);\n        const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/save-raw`, {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify({ rawState })\n        });\n        const json = await res.json();\n        if (json.ok) {\n          showToast('原始 JSON 存档已更新');\n          loadPlayerData(curPlayerId);\n        } else showToast(json.error, true);\n      } catch (e) { showToast('JSON 格式错误: ' + e.message, true); }\n    }\n\n    async function saveRawJsonFromState() {\n      if (!curPlayerId || !curState) return;\n      const res = await fetch(`/api/debug/player/${encodeURIComponent(curPlayerId)}/save-raw`, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ rawState: curState })\n      });\n      const json = await res.json();\n      if (json.ok) {\n        showToast('装备更新成功');\n        loadPlayerData(curPlayerId);\n      }\n    }\n\n    // ==========================================\n    // 全服一键清档\n    // ==========================================\n    async function wipeAllSaves() {\n      const conf1 = confirm('⚠️⚠️⚠️ 警告：确定要执行【全服一键清档】吗？\\n所有玩家的角色进度、金钱、背包装备、PVP防守记录以及战斗回放将被彻底物理清除！');\n      if (!conf1) return;\n      const conf2 = prompt('请输入 DELETE 确认彻底清档：');\n      if (conf2 !== 'DELETE') {\n        showToast('已取消清档');\n        return;\n      }\n\n      try {\n        const res = await fetch('/api/debug/wipe-all-saves', { method: 'POST' });\n        const json = await res.json();\n        if (json.ok) {\n          showToast(json.message);\n          loadPlayers();\n        } else {\n          showToast('清档失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('网络异常: ' + e.message, true);\n      }\n    }\n\n    // ==========================================\n    // TAB 2: 装备数值与图标在线配置表\n    // ==========================================\n    async function loadEquipmentConfig() {\n      try {\n        const res = await fetch('/api/debug/config/equipment');\n        const json = await res.json();\n        if (json.ok) {\n          cachedEquipmentData = json.data;\n          renderConfigTables();\n          showToast('装备配置表已读取就绪');\n        } else {\n          showToast('获取配置失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('读取配置网络异常', true);\n      }\n    }\n\n    function renderConfigTables() {\n      if (!cachedEquipmentData) return;\n      renderWeaponsTable(cachedEquipmentData.weapons || []);\n      renderArmorsTable(cachedEquipmentData.armors || []);\n      renderShieldsTable(cachedEquipmentData.shields || []);\n      document.getElementById('equipmentRawJson').value = JSON.stringify(cachedEquipmentData, null, 2);\n    }\n\n    function renderWeaponsTable(weapons) {\n      const tbody = document.querySelector('#tableWeapons tbody');\n      tbody.innerHTML = '';\n      weapons.forEach((w, idx) => {\n        const tr = document.createElement('tr');\n        tr.dataset.idx = idx;\n        tr.innerHTML = `\n          <td><input type=\"text\" class=\"cfg-w-id\" value=\"${w.id || ''}\"></td>\n          <td><input type=\"text\" class=\"cfg-w-name\" value=\"${w.name || ''}\"></td>\n          <td><input type=\"text\" class=\"cfg-w-icon\" placeholder=\"如 icon_sword_01\" value=\"${w.iconId || ''}\" style=\"color:var(--cyan);font-weight:600;\"></td>\n          <td>\n            <select class=\"cfg-w-class\">\n              <option value=\"blade\" ${w.class === 'blade' ? 'selected' : ''}>刀 (blade)</option>\n              <option value=\"sword\" ${w.class === 'sword' ? 'selected' : ''}>剑 (sword)</option>\n              <option value=\"spear\" ${w.class === 'spear' ? 'selected' : ''}>枪 (spear)</option>\n              <option value=\"blunt\" ${w.class === 'blunt' ? 'selected' : ''}>钝 (blunt)</option>\n              <option value=\"bow\" ${w.class === 'bow' ? 'selected' : ''}>弓 (bow)</option>\n              <option value=\"fist\" ${w.class === 'fist' ? 'selected' : ''}>拳 (fist)</option>\n            </select>\n          </td>\n          <td><input type=\"number\" class=\"cfg-w-dmg\" value=\"${w.dmg ?? 10}\"></td>\n          <td><input type=\"number\" step=\"0.1\" class=\"cfg-w-interval\" value=\"${w.interval ?? 1}\"></td>\n          <td><input type=\"number\" class=\"cfg-w-cost\" value=\"${w.cost ?? 6}\"></td>\n          <td><input type=\"number\" class=\"cfg-w-hit\" value=\"${w.hit ?? 100}\"></td>\n          <td><input type=\"number\" class=\"cfg-w-pmod\" value=\"${w.p_mod ?? 0}\"></td>\n          <td><input type=\"number\" class=\"cfg-w-pfixed\" value=\"${w.p_fixed ?? 0}\"></td>\n          <td><input type=\"checkbox\" class=\"cfg-w-grip\" ${w.grip === 'twohand' ? 'checked' : ''}></td>\n          <td><input type=\"checkbox\" class=\"cfg-w-dual\" ${w.dual_allowed ? 'checked' : ''}></td>\n          <td><input type=\"checkbox\" class=\"cfg-w-first\" ${w.first ? 'checked' : ''}></td>\n          <td><input type=\"number\" class=\"cfg-w-combo\" value=\"${w.combo ?? 0}\"></td>\n          <td><input type=\"number\" class=\"cfg-w-repel\" value=\"${w.repel ?? 0}\"></td>\n          <td><input type=\"number\" class=\"cfg-w-stun\" value=\"${w.stun ?? 0}\"></td>\n          <td>\n            <button class=\"btn btn-danger btn-sm\" onclick=\"deleteWeaponRow(${idx})\">删除</button>\n          </td>\n        `;\n        tbody.appendChild(tr);\n      });\n    }\n\n    function renderArmorsTable(armorsList) {\n      const tbody = document.querySelector('#tableArmors tbody');\n      tbody.innerHTML = '';\n      armorsList.forEach((a, idx) => {\n        const tr = document.createElement('tr');\n        tr.dataset.idx = idx;\n        tr.innerHTML = `\n          <td><input type=\"text\" class=\"cfg-a-id\" value=\"${a.id || ''}\"></td>\n          <td><input type=\"text\" class=\"cfg-a-name\" value=\"${a.name || ''}\"></td>\n          <td><input type=\"text\" class=\"cfg-a-icon\" placeholder=\"如 icon_armor_01\" value=\"${a.iconId || ''}\" style=\"color:var(--cyan);font-weight:600;\"></td>\n          <td><input type=\"number\" class=\"cfg-a-a\" value=\"${a.a ?? 1}\"></td>\n          <td><input type=\"number\" class=\"cfg-a-reduce\" value=\"${a.reduce ?? 0}\"></td>\n          <td><input type=\"number\" class=\"cfg-a-stamina\" value=\"${a.stamina ?? 100}\"></td>\n          <td><input type=\"number\" class=\"cfg-a-dodge\" value=\"${a.dodge ?? 0}\"></td>\n          <td><input type=\"number\" class=\"cfg-a-regen\" value=\"${a.regen ?? 5}\"></td>\n          <td><input type=\"number\" class=\"cfg-a-durability\" value=\"${a.durability ?? 100}\"></td>\n          <td><input type=\"number\" step=\"0.01\" class=\"cfg-a-decay\" value=\"${a.repair_decay ?? 0.1}\"></td>\n          <td><input type=\"text\" class=\"cfg-a-trait\" placeholder=\"如 blunt_weak_1\" value=\"${a.trait || ''}\"></td>\n          <td>\n            <button class=\"btn btn-danger btn-sm\" onclick=\"deleteArmorRow(${idx})\">删除</button>\n          </td>\n        `;\n        tbody.appendChild(tr);\n      });\n    }\n\n    function renderShieldsTable(shieldsList) {\n      const tbody = document.querySelector('#tableShields tbody');\n      tbody.innerHTML = '';\n      shieldsList.forEach((s, idx) => {\n        const tr = document.createElement('tr');\n        tr.dataset.idx = idx;\n        tr.innerHTML = `\n          <td><input type=\"text\" class=\"cfg-s-id\" value=\"${s.id || ''}\"></td>\n          <td><input type=\"text\" class=\"cfg-s-name\" value=\"${s.name || ''}\"></td>\n          <td><input type=\"text\" class=\"cfg-s-icon\" placeholder=\"如 icon_shield_01\" value=\"${s.iconId || ''}\" style=\"color:var(--cyan);font-weight:600;\"></td>\n          <td><input type=\"number\" step=\"0.01\" class=\"cfg-s-block\" value=\"${s.block_mod ?? 0.5}\"></td>\n          <td><input type=\"number\" class=\"cfg-s-cost\" value=\"${s.block_cost_mod ?? 0}\"></td>\n          <td><input type=\"number\" class=\"cfg-s-dodge\" value=\"${s.dodge_mod ?? 0}\"></td>\n          <td>\n            <button class=\"btn btn-danger btn-sm\" onclick=\"deleteShieldRow(${idx})\">删除</button>\n          </td>\n        `;\n        tbody.appendChild(tr);\n      });\n    }\n\n    function addRowCurrentSubTab() {\n      if (!cachedEquipmentData) return;\n      if (currentConfigSubTab === 'weapons') {\n        cachedEquipmentData.weapons.push({\n          id: 'new_weapon_' + Date.now().toString(36),\n          name: '新兵刃',\n          iconId: 'icon_weapon_default',\n          class: 'blade',\n          dmg: 15,\n          interval: 1.0,\n          cost: 8,\n          hit: 100,\n          p_mod: 0\n        });\n      } else if (currentConfigSubTab === 'armors') {\n        cachedEquipmentData.armors.push({\n          id: 'new_armor_' + Date.now().toString(36),\n          name: '新甲胄',\n          iconId: 'icon_armor_default',\n          a: 2,\n          reduce: 3,\n          stamina: 90,\n          dodge: 5,\n          regen: 4,\n          durability: 80,\n          repair_decay: 0.1\n        });\n      } else if (currentConfigSubTab === 'shields') {\n        cachedEquipmentData.shields.push({\n          id: 'new_shield_' + Date.now().toString(36),\n          name: '新盾牌',\n          iconId: 'icon_shield_default',\n          block_mod: 0.5,\n          block_cost_mod: 0,\n          dodge_mod: -5\n        });\n      }\n      renderConfigTables();\n      showToast('已新增一行，请填写后点击保存');\n    }\n\n    function deleteWeaponRow(idx) {\n      if (!confirm('确定删除此武器配置吗？')) return;\n      cachedEquipmentData.weapons.splice(idx, 1);\n      renderConfigTables();\n    }\n\n    function deleteArmorRow(idx) {\n      if (!confirm('确定删除此防具配置吗？')) return;\n      cachedEquipmentData.armors.splice(idx, 1);\n      renderConfigTables();\n    }\n\n    function deleteShieldRow(idx) {\n      if (!confirm('确定删除此盾牌配置吗？')) return;\n      cachedEquipmentData.shields.splice(idx, 1);\n      renderConfigTables();\n    }\n\n    function collectConfigFromDOM() {\n      if (!cachedEquipmentData) return null;\n      // 收集武器\n      const wRows = document.querySelectorAll('#tableWeapons tbody tr');\n      const weapons = [];\n      wRows.forEach(tr => {\n        const id = tr.querySelector('.cfg-w-id').value.trim();\n        if (!id) return;\n        const item = {\n          id,\n          name: tr.querySelector('.cfg-w-name').value.trim(),\n          iconId: tr.querySelector('.cfg-w-icon').value.trim() || undefined,\n          class: tr.querySelector('.cfg-w-class').value,\n          dmg: parseFloat(tr.querySelector('.cfg-w-dmg').value) || 0,\n          interval: parseFloat(tr.querySelector('.cfg-w-interval').value) || 1,\n          cost: parseFloat(tr.querySelector('.cfg-w-cost').value) || 0,\n          hit: parseFloat(tr.querySelector('.cfg-w-hit').value) || 100,\n        };\n        const pmod = parseFloat(tr.querySelector('.cfg-w-pmod').value);\n        if (pmod) item.p_mod = pmod;\n        const pfixed = parseFloat(tr.querySelector('.cfg-w-pfixed').value);\n        if (pfixed) item.p_fixed = pfixed;\n        if (tr.querySelector('.cfg-w-grip').checked) item.grip = 'twohand';\n        if (tr.querySelector('.cfg-w-dual').checked) item.dual_allowed = true;\n        if (tr.querySelector('.cfg-w-first').checked) item.first = true;\n        const combo = parseInt(tr.querySelector('.cfg-w-combo').value);\n        if (combo) item.combo = combo;\n        const repel = parseInt(tr.querySelector('.cfg-w-repel').value);\n        if (repel) item.repel = repel;\n        const stun = parseInt(tr.querySelector('.cfg-w-stun').value);\n        if (stun) item.stun = stun;\n        weapons.push(item);\n      });\n\n      // 收集防具\n      const aRows = document.querySelectorAll('#tableArmors tbody tr');\n      const armors = [];\n      aRows.forEach(tr => {\n        const id = tr.querySelector('.cfg-a-id').value.trim();\n        if (!id) return;\n        const item = {\n          id,\n          name: tr.querySelector('.cfg-a-name').value.trim(),\n          iconId: tr.querySelector('.cfg-a-icon').value.trim() || undefined,\n          a: parseInt(tr.querySelector('.cfg-a-a').value) || 1,\n          reduce: parseFloat(tr.querySelector('.cfg-a-reduce').value) || 0,\n          stamina: parseFloat(tr.querySelector('.cfg-a-stamina').value) || 100,\n          dodge: parseFloat(tr.querySelector('.cfg-a-dodge').value) || 0,\n          regen: parseFloat(tr.querySelector('.cfg-a-regen').value) || 5,\n          durability: parseFloat(tr.querySelector('.cfg-a-durability').value) || 100,\n          repair_decay: parseFloat(tr.querySelector('.cfg-a-decay').value) || 0.1,\n        };\n        const trait = tr.querySelector('.cfg-a-trait').value.trim();\n        if (trait) item.trait = trait;\n        armors.push(item);\n      });\n\n      // 收集盾牌\n      const sRows = document.querySelectorAll('#tableShields tbody tr');\n      const shields = [];\n      sRows.forEach(tr => {\n        const id = tr.querySelector('.cfg-s-id').value.trim();\n        if (!id) return;\n        const item = {\n          id,\n          name: tr.querySelector('.cfg-s-name').value.trim(),\n          iconId: tr.querySelector('.cfg-s-icon').value.trim() || undefined,\n          block_mod: parseFloat(tr.querySelector('.cfg-s-block').value) || 0.5,\n          block_cost_mod: parseFloat(tr.querySelector('.cfg-s-cost').value) || 0,\n          dodge_mod: parseFloat(tr.querySelector('.cfg-s-dodge').value) || 0,\n        };\n        shields.push(item);\n      });\n\n      cachedEquipmentData.weapons = weapons;\n      cachedEquipmentData.armors = armors;\n      cachedEquipmentData.shields = shields;\n      return cachedEquipmentData;\n    }\n\n    async function saveEquipmentConfig() {\n      const data = collectConfigFromDOM();\n      if (!data) return;\n      try {\n        const res = await fetch('/api/debug/config/equipment', {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify(data)\n        });\n        const json = await res.json();\n        if (json.ok) {\n          showToast('✅ ' + json.message);\n          cachedEquipmentData = json.data;\n          renderConfigTables();\n          loadMeta(); // 刷新快捷作弊元数据\n        } else {\n          showToast('保存失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('保存配置网络异常: ' + e.message, true);\n      }\n    }\n\n    function formatConfigJson() {\n      try {\n        const obj = JSON.parse(document.getElementById('equipmentRawJson').value);\n        document.getElementById('equipmentRawJson').value = JSON.stringify(obj, null, 2);\n      } catch (e) { showToast('JSON 格式错误', true); }\n    }\n\n    async function saveEquipmentConfigFromRaw() {\n      try {\n        const data = JSON.parse(document.getElementById('equipmentRawJson').value);\n        const res = await fetch('/api/debug/config/equipment', {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify(data)\n        });\n        const json = await res.json();\n        if (json.ok) {\n          showToast('✅ ' + json.message);\n          cachedEquipmentData = json.data;\n          renderConfigTables();\n          loadMeta();\n        } else {\n          showToast('保存失败: ' + json.error, true);\n        }\n      } catch (e) { showToast('JSON 格式解析错误: ' + e.message, true); }\n    }\n\n    // ==========================================\n    // TAB 3: 数值版本快照与回滚\n    // ==========================================\n    async function loadSnapshots() {\n      try {\n        const res = await fetch('/api/debug/config/snapshots');\n        const json = await res.json();\n        if (json.ok) {\n          renderSnapshotsTable(json.snapshots || []);\n        } else {\n          showToast('读取快照失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('读取快照网络异常', true);\n      }\n    }\n\n    function renderSnapshotsTable(snapshots) {\n      const tbody = document.querySelector('#tableSnapshots tbody');\n      tbody.innerHTML = '';\n      if (snapshots.length === 0) {\n        tbody.innerHTML = '<tr><td colspan=\"7\" style=\"text-align:center; color:var(--text-muted); padding:20px;\">暂无历史数值备份快照，您可以在上方输入备注后创建一份快照。</td></tr>';\n        return;\n      }\n\n      snapshots.forEach(s => {\n        const tr = document.createElement('tr');\n        const dateStr = new Date(s.createdAt).toLocaleString('zh-CN');\n        const sizeKb = (s.sizeBytes / 1024).toFixed(1) + ' KB';\n        tr.innerHTML = `\n          <td><code style=\"color:var(--purple);\">${s.id}</code></td>\n          <td style=\"font-weight:600; color:var(--text);\">${s.note}</td>\n          <td style=\"color:var(--text-muted); font-size:11px;\">${dateStr}</td>\n          <td><span class=\"badge badge-cyan\">${s.weaponCount} 把</span></td>\n          <td><span class=\"badge badge-amber\">${s.armorCount} 件</span></td>\n          <td style=\"color:var(--text-muted);\">${sizeKb}</td>\n          <td>\n            <div style=\"display:flex; gap:6px;\">\n              <button class=\"btn btn-purple btn-sm\" onclick=\"rollbackToSnapshot('${s.id}')\">🔄 回滚此版本</button>\n              <button class=\"btn btn-danger btn-sm\" onclick=\"deleteSnapshotItem('${s.id}')\">🗑️</button>\n            </div>\n          </td>\n        `;\n        tbody.appendChild(tr);\n      });\n    }\n\n    async function createSnapshotBackup() {\n      const note = document.getElementById('snapNote').value.trim() || '手动数值备份';\n      try {\n        const res = await fetch('/api/debug/config/snapshot', {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify({ note })\n        });\n        const json = await res.json();\n        if (json.ok) {\n          showToast('✅ ' + json.message);\n          document.getElementById('snapNote').value = '';\n          loadSnapshots();\n        } else {\n          showToast('创建快照失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('创建快照异常: ' + e.message, true);\n      }\n    }\n\n    async function rollbackToSnapshot(snapshotId) {\n      if (!confirm(`⚠️ 确定要将服务器装备数值配置一键回滚到快照【${snapshotId}】吗？\\n当前未备份的在线修改将被覆盖！`)) return;\n      try {\n        const res = await fetch('/api/debug/config/rollback', {\n          method: 'POST',\n          headers: { 'Content-Type': 'application/json' },\n          body: JSON.stringify({ snapshotId })\n        });\n        const json = await res.json();\n        if (json.ok) {\n          showToast('✅ ' + json.message);\n          loadEquipmentConfig();\n        } else {\n          showToast('回滚失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('回滚异常: ' + e.message, true);\n      }\n    }\n\n    async function deleteSnapshotItem(snapshotId) {\n      if (!confirm(`确定要删除快照【${snapshotId}】吗？`)) return;\n      try {\n        const res = await fetch(`/api/debug/config/snapshot/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' });\n        const json = await res.json();\n        if (json.ok) {\n          showToast('快照已删除');\n          loadSnapshots();\n        } else {\n          showToast('删除失败: ' + json.error, true);\n        }\n      } catch (e) {\n        showToast('删除异常: ' + e.message, true);\n      }\n    }\n\n    // 初始化\n    loadMeta();\n    loadPlayers();\n  </script>\n</body>\n</html>\n";
 
   res.send(html);
 });
 
 export default router;
-
