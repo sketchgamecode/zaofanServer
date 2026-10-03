@@ -113,5 +113,17 @@
       { "name": "尉迟钢鞭", "class": "blunt(鞭)", "trait": "双鞭: 双持时震慑15%" },
       { "name": "震天弓", "class": "bow", "trait": "贯日: 射击回合必中" }
     ]
-  }
+  },
+
+  "honor_titles": [
+    { "minHonor": 0, "maxHonor": 499, "title": "日龙包" },
+    { "minHonor": 500, "maxHonor": 899, "title": "路人" },
+    { "minHonor": 900, "maxHonor": 1199, "title": "操哥" },
+    { "minHonor": 1200, "maxHonor": 1499, "title": "猛人" },
+    { "minHonor": 1500, "maxHonor": 1799, "title": "狠人" },
+    { "minHonor": 1800, "maxHonor": 2099, "title": "好汉" },
+    { "minHonor": 2100, "maxHonor": 2399, "title": "英雄" },
+    { "minHonor": 2400, "maxHonor": 2799, "title": "大英雄" },
+    { "minHonor": 2800, "maxHonor": 999999, "title": "盖世英雄" }
+  ]
 }

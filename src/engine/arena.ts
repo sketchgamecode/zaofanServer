@@ -10,7 +10,7 @@ import { GameError } from './errors.js';
 import { MathCore } from './mathCore.js';
 import { grantExp, grantResource, spendResource } from './resourceService.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
-import { getWeaponFinal, getArmorFinal, getShieldFinal, shields } from '../lib/equipmentData.js';
+import { getWeaponFinal, getArmorFinal, getShieldFinal, shields, getHonorTitle } from '../lib/equipmentData.js';
 
 import { generateEquipment } from './equipmentGenerator.js';
 
@@ -27,7 +27,6 @@ const ARCHETYPE_CONFIGS = [
   {
     // Candidate 0: 重装锤枪/高力量型
     classIds: ['CLASS_A', 'CLASS_E'] as PlayerClassId[],
-    titles: ['铁甲客', '破阵锤手', '华阳豪强', '横刀侍卫', '光顶'],
     forcedWeapons: ['chui_guduo', 'qiang_daqiang', 'dao_changdao'],
     forcedArmors: ['zhajia', 'mingguang', 'liangdang'],
     statDist: (base: number) => ({
@@ -41,7 +40,6 @@ const ARCHETYPE_CONFIGS = [
   {
     // Candidate 1: 疾风轻甲/双持敏捷型
     classIds: ['CLASS_B', 'CLASS_D'] as PlayerClassId[],
-    titles: ['地榜游侠', '双刀绝客', '疾风刺客', '独行剑侠', '飞刀浪子'],
     forcedWeapons: ['dao_liuye', 'dao_yanling', 'jian_danshou'],
     forcedArmors: ['pijia', 'zhijia', 'tengjia'],
     statDist: (base: number) => ({
@@ -55,7 +53,6 @@ const ARCHETYPE_CONFIGS = [
   {
     // Candidate 2: 智计持盾/高防佩剑型
     classIds: ['CLASS_C', 'CLASS_A'] as PlayerClassId[],
-    titles: ['持枪客', '持盾羽林', '华阳拳师', '羽扇谋臣', '护卫头领'],
     forcedWeapons: ['jian_danshou', 'dao_huanshou'],
     forcedArmors: ['zhijia', 'mianjia', 'mingguang'],
     statDist: (base: number) => ({
@@ -81,7 +78,7 @@ function ensureArenaActive(state: GameState): void {
   state.arena.candidateSetId ??= null;
 }
 
-function buildBotCandidate(
+export function buildBotCandidate(
   state: GameState,
   seed: string,
   index: number,
@@ -104,11 +101,10 @@ function buildBotCandidate(
   const levelDelta = index === 0 ? rng.int(-1, 2) : (index === 1 ? rng.int(-2, 3) : rng.int(-2, 2));
   const level = Math.max(1, Math.min(80, state.player.level + levelDelta));
 
-  // 3. 称号与排名
-  const archetypeTitle = rng.pick(config.titles);
+  // 3. 霸气值与段位称号 (根据霸气数值精确推导)
   const honor = Math.max(0, (state.arena.honor ?? 1000) + rng.int(-180, 220));
   const rank = Math.max(1, 5000 - honor + index);
-  const title = archetypeTitle;
+  const title = getHonorTitle(honor);
 
   // 4. 属性 (真实数值，绝不为 0)
   const baseStat = 12 + level * 3 + rng.int(0, 4);
@@ -213,6 +209,7 @@ function candidateToSnapshot(candidate: ArenaOpponentPreview): CombatantSnapshot
   return {
     id: candidate.playerId,
     displayName: candidate.displayName,
+    title: candidate.title || getHonorTitle(candidate.honor),
     level: candidate.level,
     classId: candidate.classId,
     attributes: candidate.attributes,
@@ -231,9 +228,11 @@ function candidateToSnapshot(candidate: ArenaOpponentPreview): CombatantSnapshot
 
 function playerSnapshotToCombatant(state: GameState): CombatantSnapshot {
   const snapshot = buildPlayerCombatSnapshot(state);
+  const honor = state.arena.honor ?? 1000;
   return {
     id: state.player.id ?? 'player',
     displayName: state.player.displayName ?? 'Player',
+    title: getHonorTitle(honor),
     level: snapshot.level,
     classId: snapshot.classId ?? state.player.classId,
     attributes: snapshot.attributes,
@@ -243,7 +242,7 @@ function playerSnapshotToCombatant(state: GameState): CombatantSnapshot {
       min: snapshot.combatStats.damageMin,
       max: snapshot.combatStats.damageMax,
     },
-    honor: state.arena.honor ?? 1000,
+    honor,
     rank: state.arena.rank ?? null,
     avatarId: state.player.avatarId,
     equipmentSummary: snapshot.equipmentSummary,
@@ -271,6 +270,7 @@ export function arenaGetInfo(ctx: ActionContext, _payload: Record<string, unknow
   playerSummary: {
     honor: number;
     rank: number | null;
+    title: string;
     dailyXpWins: number;
     maxDailyXpWins: number;
     cooldownRemainingMs: number;
@@ -279,6 +279,7 @@ export function arenaGetInfo(ctx: ActionContext, _payload: Record<string, unknow
   ensureArenaActive(ctx.state);
   if (!ctx.state.arena.candidates?.length) refreshCandidates(ctx.state, ctx.now);
   ctx.markDirty();
+  const honor = ctx.state.arena.honor ?? 1000;
   return {
     ok: true,
     action: 'ARENA_GET_INFO',
@@ -287,8 +288,9 @@ export function arenaGetInfo(ctx: ActionContext, _payload: Record<string, unknow
     data: {
       arena: ctx.state.arena,
       playerSummary: {
-        honor: ctx.state.arena.honor ?? 1000,
+        honor,
         rank: ctx.state.arena.rank ?? null,
+        title: getHonorTitle(honor),
         dailyXpWins: ctx.state.arena.dailyXpWins ?? 0,
         maxDailyXpWins: ctx.state.arena.maxDailyXpWins ?? 10,
         cooldownRemainingMs: Math.max(0, (ctx.state.arena.cooldownEndTime ?? 0) - ctx.now),
@@ -381,6 +383,8 @@ export async function arenaFight(ctx: ActionContext, payload: Record<string, unk
       honorDelta: delta,
       honorBefore,
       honorAfter,
+      titleBefore: getHonorTitle(honorBefore),
+      titleAfter: getHonorTitle(honorAfter),
       rankBefore,
       rankAfter: ctx.state.arena.rank ?? null,
       rankDelta: rankBefore === null ? null : (ctx.state.arena.rank ?? rankBefore) - rankBefore,

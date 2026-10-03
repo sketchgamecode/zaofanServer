@@ -118,6 +118,12 @@ export interface Arrow {
   hit_mod: number;
 }
 
+export interface HonorTitleTier {
+  minHonor: number;
+  maxHonor: number;
+  title: string;
+}
+
 // 最终战斗衍生实体类型
 export interface WeaponFinal {
   id: string;
@@ -170,13 +176,39 @@ export interface ShieldFinal {
 
 // ---------- 强类型 Getter 数组 ----------
 
-export const baseWeapons: BaseWeapon[] = equipmentData.weapons;
-export const materials: Material[] = equipmentData.materials;
-export const shaftMaterials: ShaftMaterial[] = equipmentData.shaft_materials;
-export const armors: Armor[] = equipmentData.armors;
-export const armorMaterialUpgrades: ArmorMaterialUpgrade[] = equipmentData.armor_material_upgrades;
-export const shields: Shield[] = equipmentData.shields;
-export const arrows: Arrow[] = equipmentData.arrows;
+export const baseWeapons: BaseWeapon[] = equipmentData.weapons || [];
+export const materials: Material[] = equipmentData.materials || [];
+export const shaftMaterials: ShaftMaterial[] = equipmentData.shaft_materials || [];
+export const armors: Armor[] = equipmentData.armors || [];
+export const armorMaterialUpgrades: ArmorMaterialUpgrade[] = equipmentData.armor_material_upgrades || [];
+export const shields: Shield[] = equipmentData.shields || [];
+export const arrows: Arrow[] = equipmentData.arrows || [];
+export const honorTitles: HonorTitleTier[] = equipmentData.honor_titles || [
+  { minHonor: 0, maxHonor: 499, title: '日龙包' },
+  { minHonor: 500, maxHonor: 899, title: '路人' },
+  { minHonor: 900, maxHonor: 1199, title: '操哥' },
+  { minHonor: 1200, maxHonor: 1499, title: '猛人' },
+  { minHonor: 1500, maxHonor: 1799, title: '狠人' },
+  { minHonor: 1800, maxHonor: 2099, title: '好汉' },
+  { minHonor: 2100, maxHonor: 2399, title: '英雄' },
+  { minHonor: 2400, maxHonor: 2799, title: '大英雄' },
+  { minHonor: 2800, maxHonor: 999999, title: '盖世英雄' },
+];
+
+/** 根据霸气数值动态计算段位称号 */
+export function getHonorTitle(honor: number): string {
+  const safeHonor = Math.max(0, Math.floor(honor || 0));
+  const matched = honorTitles.find((t) => safeHonor >= t.minHonor && safeHonor <= t.maxHonor);
+  if (matched) return matched.title;
+  // 兜底逻辑：若超出最大区间则返回最高档，否则返回第一档
+  if (honorTitles.length > 0) {
+    if (safeHonor >= honorTitles[honorTitles.length - 1].minHonor) {
+      return honorTitles[honorTitles.length - 1].title;
+    }
+    return honorTitles[0].title;
+  }
+  return '路人';
+}
 
 // ---------- 热重载与持久化 ----------
 
@@ -214,6 +246,10 @@ export function reloadEquipmentData(newData?: any): void {
   if (Array.isArray(data.arrows)) {
     arrows.length = 0;
     arrows.push(...data.arrows);
+  }
+  if (Array.isArray(data.honor_titles)) {
+    honorTitles.length = 0;
+    honorTitles.push(...data.honor_titles);
   }
 }
 

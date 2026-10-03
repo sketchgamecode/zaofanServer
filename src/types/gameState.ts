@@ -287,6 +287,7 @@ export type BattleContext =
 export type CombatantSnapshot = {
   id: string;
   displayName: string;
+  title?: string;
   level: number;
   classId: PlayerClassId;
   attributes: BaseAttributeValues;
