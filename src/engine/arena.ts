@@ -10,7 +10,7 @@ import { GameError } from './errors.js';
 import { MathCore } from './mathCore.js';
 import { grantExp, grantResource, spendResource } from './resourceService.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
-import { getWeaponFinal, getArmorFinal, getShieldFinal, shields, getHonorTitle } from '../lib/equipmentData.js';
+import { getWeaponFinal, getArmorFinal, getShieldFinal, shields, getHonorTitle, enrichEquipmentItem } from '../lib/equipmentData.js';
 
 import { generateEquipment } from './equipmentGenerator.js';
 
@@ -222,7 +222,14 @@ function candidateToSnapshot(candidate: ArenaOpponentPreview): CombatantSnapshot
     rank: candidate.rank,
     avatarId: candidate.avatarId,
     equipmentSummary: { itemPowerTotal: 0 },
-    loadout: candidate.loadout,
+    loadout: candidate.loadout
+      ? {
+          weapon: enrichEquipmentItem(candidate.loadout.weapon),
+          offHand: enrichEquipmentItem(candidate.loadout.offHand),
+          body: enrichEquipmentItem(candidate.loadout.body),
+          arrow: candidate.loadout.arrow,
+        }
+      : undefined,
   };
 }
 

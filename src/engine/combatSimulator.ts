@@ -5,6 +5,7 @@ import {
   getArmorFinal,
   getShieldFinal,
   shields,
+  resolveItemIconId,
   WeaponFinal,
   ArmorFinal,
   ShieldFinal,
@@ -117,12 +118,15 @@ export function getFallbackLoadout(classId: PlayerClassId, level: number): Comba
 
   const createMockItem = (itemId: string, slot: 'weapon' | 'offHand' | 'body'): EquipmentItem => {
     const realName = ITEM_NAMES[itemId] || '制式装备';
+    const id = `eq_${slot}_fallback_${itemId}`;
+    const iconId = resolveItemIconId({ slot, itemId, id });
     return {
-      id: `eq_${slot}_fallback_${itemId}`,
+      id,
       name: realName,
       description: `装备：${realName}`,
       slot,
       rarity: level >= 45 ? 2 : (level >= 25 ? 1 : 0),
+      iconId,
       sellPrice: 0,
       bonusAttributes: {},
       itemId,

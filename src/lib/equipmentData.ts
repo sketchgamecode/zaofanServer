@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { GameState } from '../types/gameState.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -118,6 +119,12 @@ export interface Arrow {
   hit_mod: number;
 }
 
+export interface Craft {
+  id: string;
+  name: string;
+  desc?: string;
+}
+
 export interface HonorTitleTier {
   minHonor: number;
   maxHonor: number;
@@ -178,6 +185,13 @@ export interface ShieldFinal {
 
 export const baseWeapons: BaseWeapon[] = equipmentData.weapons || [];
 export const materials: Material[] = equipmentData.materials || [];
+export const crafts: Craft[] = equipmentData.crafts || [
+  { id: 'guangang', name: '灌钢', desc: '灌钢工艺 (破甲+1, 伤害+5%)' },
+  { id: 'baogang',  name: '包钢', desc: '包钢工艺 (破甲+1, 伤害+5%)' },
+  { id: 'jiagang',  name: '夹钢', desc: '夹钢工艺 (破甲+1, 伤害+5%)' },
+  { id: 'cuiri',    name: '淬日', desc: '淬日工艺 (暴击伤害提升)' },
+  { id: 'bailian',  name: '百炼', desc: '百炼工艺 (基础数值提升)' },
+];
 export const shaftMaterials: ShaftMaterial[] = equipmentData.shaft_materials || [];
 export const armors: Armor[] = equipmentData.armors || [];
 export const armorMaterialUpgrades: ArmorMaterialUpgrade[] = equipmentData.armor_material_upgrades || [];
@@ -226,6 +240,10 @@ export function reloadEquipmentData(newData?: any): void {
   if (Array.isArray(data.materials)) {
     materials.length = 0;
     materials.push(...data.materials);
+  }
+  if (Array.isArray(data.crafts)) {
+    crafts.length = 0;
+    crafts.push(...data.crafts);
   }
   if (Array.isArray(data.shaft_materials)) {
     shaftMaterials.length = 0;
@@ -467,6 +485,7 @@ export function getWeaponFinal(
     grip: base.grip,
     bonusA,
     bonusScale,
+    iconId: base.iconId,
   };
 }
 
@@ -512,6 +531,7 @@ export function getArmorFinal(armorId: string, upgradeId: string | null | undefi
     durability,
     repairDecay,
     trait: base.trait,
+    iconId: base.iconId,
   };
 }
 
@@ -526,5 +546,99 @@ export function getShieldFinal(shieldId: string): ShieldFinal {
     blockMod: base.block_mod,
     blockCostMod: base.block_cost_mod,
     dodgeMod: base.dodge_mod,
+    iconId: base.iconId,
   };
+}
+
+/** 根据 itemId / id 查找当前配置中对应的最新 iconId */
+export function resolveItemIconId(
+  item: { slot?: string; itemId?: string; id?: string; iconId?: string } | null | undefined
+): string | undefined {
+  if (!item) return undefined;
+  const key = item.itemId || item.id;
+  if (key) {
+    const weapon = baseWeapons.find((w) => w.id === key);
+    if (weapon?.iconId) return weapon.iconId;
+    const armor = armors.find((a) => a.id === key);
+    if (armor?.iconId) return armor.iconId;
+    const shield = shields.find((s) => s.id === key);
+    if (shield?.iconId) return shield.iconId;
+  }
+  return item.iconId;
+}
+
+/** 生成/拼装装备的完整汉字名称（工艺前缀 + 材质前缀 + 基础装备名） */
+export function composeItemName(params: {
+  slot: string;
+  itemId?: string;
+  customName?: string;
+  material?: string | null;
+  craft?: string | null;
+  shaft?: string | null;
+  upgrade?: string | null;
+  arrow?: string | null;
+}): string {
+  if (params.customName) return params.customName;
+  const { slot, itemId, material, craft, shaft, upgrade } = params;
+
+  if (slot === 'weapon') {
+    const base = baseWeapons.find((w) => w.id === itemId);
+    const matName = material ? (materials.find((m) => m.id === material)?.name ?? '') : '';
+    const craftName = craft ? (crafts.find((c) => c.id === craft)?.name ?? craft) : '';
+    const shaftName = shaft ? (shaftMaterials.find((s) => s.id === shaft)?.name.slice(0, 3) ?? '') : '';
+    return `${craftName}${shaftName}${matName}${base?.name || '兵刃'}`;
+  } else if (slot === 'body') {
+    const base = armors.find((a) => a.id === itemId);
+    const upName = upgrade ? (armorMaterialUpgrades.find((u) => u.id === upgrade)?.name ?? '') : '';
+    return `${upName}${base?.name || '甲胄'}`;
+  } else {
+    const isShield = shields.some((s) => s.id === itemId);
+    if (isShield) {
+      const base = shields.find((s) => s.id === itemId);
+      return `精装${base?.name || '盾牌'}`;
+    } else {
+      const base = baseWeapons.find((w) => w.id === itemId);
+      const matName = material ? (materials.find((m) => m.id === material)?.name ?? '') : '';
+      const craftName = craft ? (crafts.find((c) => c.id === craft)?.name ?? craft) : '';
+      return `${craftName}${matName}${base?.name || '短兵'}·副手`;
+    }
+  }
+}
+
+/** 纠正老存档中误将工艺拼音作为前缀的装备名称 */
+export function normalizeItemName(item: { name?: string; craft?: string | null }): void {
+  if (!item.name || !item.craft) return;
+  const craftObj = crafts.find((c) => c.id === item.craft);
+  if (craftObj && item.name.startsWith(item.craft)) {
+    item.name = craftObj.name + item.name.slice(item.craft.length);
+  }
+}
+
+/** 动态为装备对象补全/同步最新的 iconId 及纠正汉字名称 */
+export function enrichEquipmentItem<
+  T extends { slot?: string; itemId?: string; id?: string; iconId?: string; name?: string; craft?: string | null } | null | undefined
+>(item: T): T {
+  if (!item) return item;
+  const latestIcon = resolveItemIconId(item);
+  if (latestIcon) {
+    item.iconId = latestIcon;
+  }
+  normalizeItemName(item);
+  return item;
+}
+
+/** 遍历并为整个 GameState 的装备栏、背包及黑市物品同步最新 iconId 与汉字名称 */
+export function normalizeGameStateEquipment(state: GameState): GameState {
+  if (state.equipment?.equipped) {
+    if (state.equipment.equipped.weapon) enrichEquipmentItem(state.equipment.equipped.weapon);
+    if (state.equipment.equipped.offHand) enrichEquipmentItem(state.equipment.equipped.offHand);
+    if (state.equipment.equipped.body) enrichEquipmentItem(state.equipment.equipped.body);
+  }
+  if (state.inventory?.items) {
+    state.inventory.items.forEach((item) => enrichEquipmentItem(item));
+  }
+  if (state.blackMarket?.items) {
+    state.blackMarket.items.forEach((item) => enrichEquipmentItem(item));
+  }
+  return state;
 }

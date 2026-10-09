@@ -7,6 +7,7 @@ import type {
   CombatLoadout,
 } from '../types/gameState.js';
 import { buildPlayerBattleSide, getTotalAttributes } from './mathCore.js';
+import { enrichEquipmentItem } from '../lib/equipmentData.js';
 
 function getWeaponAverageDamage(item: EquipmentItem | null, level: number): number {
   if (!item?.weaponDamage) {
@@ -39,9 +40,9 @@ export function buildPlayerCombatSnapshot(state: GameState): PlayerCombatSnapsho
   const equipmentSummary = getEquipmentSummary(state.equipment.equipped, state.player.level);
 
   const loadout: CombatLoadout = {
-    weapon: state.equipment.equipped.weapon,
-    offHand: state.equipment.equipped.offHand,
-    body: state.equipment.equipped.body,
+    weapon: enrichEquipmentItem(state.equipment.equipped.weapon),
+    offHand: enrichEquipmentItem(state.equipment.equipped.offHand),
+    body: enrichEquipmentItem(state.equipment.equipped.body),
     arrow: state.equipment.equipped.weapon?.arrow ?? 'normal',
   };
 

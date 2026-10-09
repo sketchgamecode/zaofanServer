@@ -8,6 +8,8 @@ import {
   armorMaterialUpgrades,
   shields,
   arrows,
+  resolveItemIconId,
+  composeItemName,
   getWeaponFinal,
   getArmorFinal,
   getShieldFinal,
@@ -192,10 +194,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
       weaponDamageVal = { min: finalW.dmg, max: finalW.dmg };
 
       // 组装名称
-      const matName = materials.find((m) => m.id === material)?.name ?? '';
-      const craftName = craft ? craft : '';
-      const shaftName = shaft ? shaftMaterials.find((s) => s.id === shaft)?.name.slice(0, 3) ?? '' : '';
-      name = `${craftName}${shaftName}${matName}${base.name}`;
+      name = composeItemName({ slot: 'weapon', itemId, material, craft, shaft, arrow });
       desc = `一件${name}。基础命中率: ${finalW.hit}%，攻击耗体: ${finalW.cost}。`;
     } else if (slot === 'body') {
       // 甲胄
@@ -221,8 +220,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
       const finalA = getArmorFinal(itemId, upgrade);
       armorVal = finalA.reduce;
 
-      const upName = upgrade ? armorMaterialUpgrades.find((u) => u.id === upgrade)?.name ?? '' : '';
-      name = `${upName}${base.name}`;
+      name = composeItemName({ slot: 'body', itemId, upgrade });
       desc = `防具：${name}。防护级: A${finalA.a}，护甲减伤: ${finalA.reduce}，体力上限修正: ${finalA.stamina}。`;
     } else {
       // 副手 (offHand)：盾牌 或 允许双持的副手武器
@@ -265,8 +263,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
         const finalW = getWeaponFinal(itemId, material, craft, null, null);
         weaponDamageVal = { min: finalW.dmg, max: finalW.dmg };
 
-        const matName = materials.find((m) => m.id === material)?.name ?? '';
-        name = `${matName}${base.name}·副手`;
+        name = composeItemName({ slot: 'offHand', itemId, material, craft });
         desc = `双持副手武器：${name}。副手伤害折算 80%，格挡率强制为 0%。`;
       }
     }
@@ -279,12 +276,9 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
   // 随机唯一 ID
   const id = `eq_${slot}_${Date.now().toString(36)}_${Math.floor(rng.next() * 0xffff).toString(16)}`;
 
-    const customIconId = (slot === 'weapon'
-      ? baseWeapons.find((w) => w.id === itemId)?.iconId
-      : slot === 'body'
-        ? armors.find((a) => a.id === itemId)?.iconId
-        : shields.find((s) => s.id === itemId)?.iconId)
-      || `item_${slot}_${String(rng.int(1, 5)).padStart(2, '0')}`;
+  const customIconId =
+    resolveItemIconId({ slot, itemId, id }) ||
+    `item_${slot}_${String(rng.int(1, 5)).padStart(2, '0')}`;
 
     return {
       id,

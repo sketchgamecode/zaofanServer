@@ -3,6 +3,7 @@ import { CORE_SCHEMA_VERSION } from '../config/coreRules.js';
 import { createInitialGameState } from '../engine/gameStateFactory.js';
 import { GameError } from '../engine/errors.js';
 import { isGameState, type GameState } from '../types/gameState.js';
+import { normalizeGameStateEquipment } from './equipmentData.js';
 
 export type LoadGameStateResult = {
   state: GameState;
@@ -22,23 +23,28 @@ export async function loadOrCreateGameState(playerId: string, now: number): Prom
   }
 
   if (!data?.game_state) {
+    const initialState = createInitialGameState({ now, playerId });
+    normalizeGameStateEquipment(initialState);
     return {
-      state: createInitialGameState({ now, playerId }),
+      state: initialState,
       created: true,
       resetInvalid: false,
     };
   }
 
   if (!isGameState(data.game_state)) {
+    const initialState = createInitialGameState({ now, playerId });
+    normalizeGameStateEquipment(initialState);
     return {
-      state: createInitialGameState({ now, playerId }),
+      state: initialState,
       created: false,
       resetInvalid: true,
     };
   }
 
+  const state = normalizeGameStateEquipment(data.game_state);
   return {
-    state: data.game_state,
+    state,
     created: false,
     resetInvalid: false,
   };
