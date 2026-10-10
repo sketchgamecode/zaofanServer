@@ -381,8 +381,115 @@ export type BattleActionEvent = {
   hits: BattleHitEvent[];
 };
 
+// Timeline V3 Types
+export type TimelineActionKind = 'NORMAL' | 'COMBO' | 'OFFHAND' | 'COUNTER';
+export type TimelineOutcomeType = 'HIT' | 'GRAZED' | 'SHOCK' | 'MIRROR_DEFLECT' | 'BLOCKED' | 'MISS' | 'REPELLED';
+export type TimelineEventType =
+  | 'ATTACK'
+  | 'ATTACK_RESULT'
+  | 'STAMINA_CHANGE'
+  | 'STATUS_APPLY'
+  | 'STATUS_TRIGGER'
+  | 'STATUS_REMOVE'
+  | 'RECOVER_REST';
+
+export interface EquipmentEntitySnapshot {
+  slot: 'weapon' | 'offHand' | 'body';
+  itemId: string;
+  instanceId: string;
+  name: string;
+  iconId: string;
+  class?: string;
+  tier: number;
+  p: number;
+  a: number;
+  reduce: number;
+}
+
+export interface CombatantInitialState {
+  hp: number;
+  hpMax: number;
+  stamina: number;
+  staminaMax: number;
+  loadoutSummary: {
+    weapon?: EquipmentEntitySnapshot;
+    offHand?: EquipmentEntitySnapshot;
+    body?: EquipmentEntitySnapshot;
+  };
+}
+
+export interface TimelineStatusEffectParams {
+  hitDebuffPp?: number;
+  skipAction?: boolean;
+  attackFailed?: boolean;
+}
+
+export interface TimelineStatusLifecycleDetail {
+  statusId: string;
+  statusType: 'EXPOSED' | 'STUN' | 'REPEL' | 'PUSH_DEBUFF' | 'CHARGING';
+  operation: 'APPLY' | 'TRIGGER' | 'REMOVE';
+  sourceEventId?: string;
+  holder: 'player' | 'enemy';
+  effectParams?: TimelineStatusEffectParams;
+}
+
+export interface TimelineReasonParams {
+  p?: number;
+  a?: number;
+  penDiff?: number;
+  rawDmg?: number;
+  armorReduce?: number;
+  staminaDelta?: number;
+  hitRatePercent?: number;
+  dodgeRatePercent?: number;
+  rollValue?: number;
+  blockRatePercent?: number;
+  fixedShockDmg?: number;
+  counterScale?: number;
+}
+
+export interface TimelineReasonItem {
+  code: string;
+  sourceSide: 'player' | 'enemy';
+  sourceSlot?: 'weapon' | 'offHand' | 'body';
+  sourceItemId?: string;
+  sourceItemInstanceId?: string;
+  sourceName?: string;
+  params?: TimelineReasonParams;
+}
+
+export interface CombatantResourcePair {
+  player: { hp: number; stamina: number };
+  enemy: { hp: number; stamina: number };
+}
+
+export interface TimelineEvent {
+  eventId: string;
+  sequence: number;
+  actionId: string;
+  roundNumber: number;
+  parentEventId?: string;
+  actor: 'player' | 'enemy';
+  target: 'player' | 'enemy';
+  eventType: TimelineEventType;
+  actionKind?: TimelineActionKind;
+  outcome?: TimelineOutcomeType;
+  damage: number;
+  wasCrit: boolean;
+  stateBefore: CombatantResourcePair;
+  stateAfter: CombatantResourcePair;
+  statusDetail?: TimelineStatusLifecycleDetail;
+  reasons: TimelineReasonItem[];
+}
+
 export type BattleResultV2 = {
   schemaVersion: 2;
+  timelineSchemaVersion?: 1;
+  initialState?: {
+    player: CombatantInitialState;
+    enemy: CombatantInitialState;
+  };
+  timelineEvents?: TimelineEvent[];
   context: BattleContext;
   seedPublicHash: string;
   winner: 'player' | 'enemy' | 'draw';

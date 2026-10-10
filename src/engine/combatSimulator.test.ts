@@ -157,4 +157,84 @@ describe('combatSimulator Sancai V1', () => {
 
     expect(hasMirrorDeflect).toBe(true);
   });
+
+  it('generates consistent and valid Timeline V3 events with resource continuity', () => {
+    const chui = {
+      id: 'eq_chui_v3',
+      name: '骨朵锤',
+      description: '锤',
+      slot: 'weapon' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'chui_guduo',
+      material: 'chaogang',
+    };
+    const zhajia = {
+      id: 'eq_zhajia_v3',
+      name: '铁札甲',
+      description: '札甲',
+      slot: 'body' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'zhajia',
+      upgrade: null,
+    };
+
+    const loadout: CombatantSnapshotLoadout = { weapon: chui, offHand: null, body: zhajia };
+    const result = simulateBattleV2({
+      player: fighter('player_v3', 'CLASS_E', loadout),
+      enemy: fighter('enemy_v3', 'CLASS_A', loadout),
+      seed: 'timeline-v3-verification-seed',
+      context: 'ARENA',
+    });
+
+    expect(result.timelineSchemaVersion).toBe(1);
+    expect(result.initialState).toBeDefined();
+    expect(result.timelineEvents).toBeDefined();
+    expect(result.timelineEvents!.length).toBeGreaterThan(0);
+
+    const events = result.timelineEvents!;
+    const init = result.initialState!;
+
+    // 验证初始状态
+    expect(init.player.hp).toBe(result.player.hpMax);
+    expect(init.enemy.hp).toBe(result.enemy.hpMax);
+
+    // 验证事件严格连续性
+    for (let i = 0; i < events.length; i++) {
+      const evt = events[i];
+      expect(evt.sequence).toBe(i + 1);
+      expect(evt.eventId).toBe(`evt_${i + 1}`);
+      expect(evt.actionId).toBeDefined();
+      expect(evt.eventType).toBeDefined();
+
+      if (evt.eventType === 'ATTACK') {
+        expect(evt.actionKind).toBeDefined();
+      }
+      if (evt.eventType === 'ATTACK_RESULT') {
+        expect(evt.outcome).toBeDefined();
+      }
+
+      if (i === 0) {
+        expect(evt.stateBefore.player.hp).toBe(init.player.hp);
+        expect(evt.stateBefore.player.stamina).toBe(init.player.stamina);
+        expect(evt.stateBefore.enemy.hp).toBe(init.enemy.hp);
+        expect(evt.stateBefore.enemy.stamina).toBe(init.enemy.stamina);
+      } else {
+        const prev = events[i - 1];
+        expect(evt.stateBefore.player.hp).toBe(prev.stateAfter.player.hp);
+        expect(evt.stateBefore.player.stamina).toBe(prev.stateAfter.player.stamina);
+        expect(evt.stateBefore.enemy.hp).toBe(prev.stateAfter.enemy.hp);
+        expect(evt.stateBefore.enemy.stamina).toBe(prev.stateAfter.enemy.stamina);
+      }
+    }
+
+    // 验证终局状态与结算完全一致
+    const lastEvent = events[events.length - 1];
+    expect(lastEvent.stateAfter.player.hp).toBe(result.player.hpEnd);
+    expect(lastEvent.stateAfter.enemy.hp).toBe(result.enemy.hpEnd);
+  });
 });
+

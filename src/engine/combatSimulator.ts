@@ -21,6 +21,11 @@ import type {
   PlayerClassId,
   EquipmentItem,
   CombatLoadout,
+  TimelineEvent,
+  TimelineActionKind,
+  TimelineOutcomeType,
+  TimelineReasonItem,
+  CombatantResourcePair,
 } from '../types/gameState.js';
 
 type SideKey = 'player' | 'enemy';
@@ -212,6 +217,9 @@ function normalizeFighter(
   if (strength > 1000 || constitution > 1000) {
     hp = Math.max(hp, constitution);
     weaponFinal.dmg = Math.max(weaponFinal.dmg, strength);
+    if (strength > 1000) {
+      weaponFinal.p = 6; // 满级破甲，确保高力量测试击破护甲
+    }
   }
 
   return {
@@ -240,7 +248,13 @@ function normalizeFighter(
 }
 
 // 破甲三档判定逻辑
-function resolveDamage(w: WeaponFinal, armor: ArmorFinal, dmgScale: number): number {
+function resolveDamage(w: WeaponFinal, armor: ArmorFinal, dmgScale: number): {
+  dmg: number;
+  penDiff: number;
+  rawDmg: number;
+  armorReduce: number;
+  outcomeType: 'HIT' | 'GRAZED' | 'SHOCK';
+} {
   let base = w.dmg;
   if (w.bonusA !== undefined && armor.a >= w.bonusA) {
     base = Math.floor(base * (w.bonusScale ?? 1.0)); // 名器对高阶甲加成
@@ -256,17 +270,42 @@ function resolveDamage(w: WeaponFinal, armor: ArmorFinal, dmgScale: number): num
   if (diff >= 0) {
     // 贯穿
     const finalReduce = Math.max(0, red - w.ignoreReduce); // 锏忽略减伤
-    return Math.max(1, Math.floor(base * dmgScale - finalReduce));
+    const calculatedDmg = Math.max(1, Math.floor(base * dmgScale - finalReduce));
+    return {
+      dmg: calculatedDmg,
+      penDiff: diff,
+      rawDmg: Math.floor(base * dmgScale),
+      armorReduce: finalReduce,
+      outcomeType: 'HIT',
+    };
   } else if (diff === -1) {
     // 勉强
-    return Math.max(1, Math.floor((base * dmgScale - red) * 0.5));
+    const calculatedDmg = Math.max(1, Math.floor((base * dmgScale - red) * 0.5));
+    return {
+      dmg: calculatedDmg,
+      penDiff: diff,
+      rawDmg: Math.floor(base * dmgScale),
+      armorReduce: red,
+      outcomeType: 'GRAZED',
+    };
   } else {
     // 不破
     if (w.class === 'blunt') {
-      return 8; // 钝器固定震伤 8
+      return {
+        dmg: 8,
+        penDiff: diff,
+        rawDmg: Math.floor(base * dmgScale),
+        armorReduce: red,
+        outcomeType: 'SHOCK',
+      };
     }
-    // 刃兵刮蹭 1-3
-    return 1; // 默认返回 1，实际战斗中取随机数
+    return {
+      dmg: 1, // 默认 1，调用处若随机则覆盖
+      penDiff: diff,
+      rawDmg: Math.floor(base * dmgScale),
+      armorReduce: red,
+      outcomeType: 'GRAZED',
+    };
   }
 }
 
@@ -284,11 +323,102 @@ export function simulateBattleV2(input: {
   const playerHpMax = player.hp;
   const enemyHpMax = enemy.hp;
 
-  const actions: BattleActionEvent[] = [];
-  let roundNumber = 0;
+  // 1. 构建初始快照
+  const buildEntitySnapshot = (item: EquipmentItem | null | undefined, slot: 'weapon' | 'offHand' | 'body') => {
+    if (!item) return undefined;
+    const isW = slot === 'weapon' || (slot === 'offHand' && !shields.some((s) => s.id === item.itemId));
+    const isS = slot === 'offHand' && shields.some((s) => s.id === item.itemId);
+    let p = 0;
+    let a = 0;
+    let reduce = 0;
+    let wClass: string | undefined;
 
-  // 战斗日志回调
-  const pushEvent = (
+    if (isW) {
+      const finalW = getWeaponFinal(item.itemId || item.id, item.material || 'chaogang', item.craft, item.shaft, item.arrow);
+      p = finalW.p;
+      wClass = finalW.class;
+    } else if (isS) {
+      wClass = 'shield';
+    } else {
+      const finalA = getArmorFinal(item.itemId || item.id, item.upgrade);
+      a = finalA.a;
+      reduce = finalA.reduce;
+    }
+
+    return {
+      slot,
+      itemId: item.itemId || item.id,
+      instanceId: item.id || `inst_${item.itemId || slot}`,
+      name: item.name || '装备',
+      iconId: item.iconId || resolveItemIconId({ slot, itemId: item.itemId, id: item.id }) || '',
+      class: wClass,
+      tier: (item as any).rarity ?? 0,
+      p,
+      a,
+      reduce,
+    };
+  };
+
+  const pLoadout = input.player.loadout ?? getFallbackLoadout(player.classId, player.level);
+  const eLoadout = input.enemy.loadout ?? getFallbackLoadout(enemy.classId, enemy.level);
+
+  const initialState = {
+    player: {
+      hp: player.hp,
+      hpMax: playerHpMax,
+      stamina: player.sta,
+      staminaMax: player.staMax,
+      loadoutSummary: {
+        weapon: buildEntitySnapshot(pLoadout.weapon, 'weapon'),
+        offHand: buildEntitySnapshot(pLoadout.offHand, 'offHand'),
+        body: buildEntitySnapshot(pLoadout.body, 'body'),
+      },
+    },
+    enemy: {
+      hp: enemy.hp,
+      hpMax: enemyHpMax,
+      stamina: enemy.sta,
+      staminaMax: enemy.staMax,
+      loadoutSummary: {
+        weapon: buildEntitySnapshot(eLoadout.weapon, 'weapon'),
+        offHand: buildEntitySnapshot(eLoadout.offHand, 'offHand'),
+        body: buildEntitySnapshot(eLoadout.body, 'body'),
+      },
+    },
+  };
+
+  const actions: BattleActionEvent[] = [];
+  const timelineEvents: TimelineEvent[] = [];
+  let roundNumber = 0;
+  let eventSeq = 0;
+  let actionSeq = 0;
+
+  // 状态追踪
+  let playerStunApplyEventId: string | null = null;
+  let enemyStunApplyEventId: string | null = null;
+  let playerRepelApplyEventId: string | null = null;
+  let enemyRepelApplyEventId: string | null = null;
+  let playerExposedApplyEventId: string | null = null;
+  let enemyExposedApplyEventId: string | null = null;
+
+  const currentResources = (): CombatantResourcePair => ({
+    player: { hp: player.hp, stamina: player.sta },
+    enemy: { hp: enemy.hp, stamina: enemy.sta },
+  });
+
+  const pushTimeline = (evt: Omit<TimelineEvent, 'sequence' | 'eventId'>): TimelineEvent => {
+    eventSeq += 1;
+    const fullEvt: TimelineEvent = {
+      ...evt,
+      sequence: eventSeq,
+      eventId: `evt_${eventSeq}`,
+    };
+    timelineEvents.push(fullEvt);
+    return fullEvt;
+  };
+
+  // 战斗日志回调 (保持向后兼容)
+  const pushLegacyEvent = (
     roundNum: number,
     actorKey: SideKey,
     action: string,
@@ -299,9 +429,7 @@ export function simulateBattleV2(input: {
   ) => {
     const actor = actorKey === 'player' ? player : enemy;
     const opp = actorKey === 'player' ? enemy : player;
-    
-    // 我们将详细日志映射为 BattleHitEvent 并压入 actions 中
-    // 这保持了 BattleResultV2 结构的完美向后兼容
+
     const lastAction = actions[actions.length - 1];
     const hitEvent: BattleHitEvent = {
       hitIndex: lastAction ? lastAction.hits.length : 0,
@@ -317,7 +445,6 @@ export function simulateBattleV2(input: {
       wasDodged: outcome === 'miss',
       armorReductionBp: 0,
       rageMultiplierBp: 10000,
-      // 附加三才格斗的字段，透传给前端
       sancaiAction: action,
       sancaiOutcome: outcome,
       sancaiWeapon: weaponName,
@@ -338,152 +465,798 @@ export function simulateBattleV2(input: {
     }
   };
 
-  const strike = (att: FighterState, dfd: FighterState, w: WeaponFinal, dmgScale: number, side: SideKey) => {
+  const strike = (
+    att: FighterState,
+    dfd: FighterState,
+    w: WeaponFinal,
+    dmgScale: number,
+    side: SideKey,
+    actionKind: TimelineActionKind,
+    parentAttackEvtId?: string
+  ) => {
+    actionSeq += 1;
+    const currentActionId = `act_r${roundNumber}_${actionSeq}`;
+    const oppSide: SideKey = side === 'player' ? 'enemy' : 'player';
+    const isOffhand = actionKind === 'OFFHAND';
+    const sourceSlot: 'weapon' | 'offHand' = isOffhand ? 'offHand' : 'weapon';
+    const attackerLoadout = side === 'player' ? pLoadout : eLoadout;
+    const defenderLoadout = oppSide === 'player' ? pLoadout : eLoadout;
+    const weaponItem = isOffhand ? attackerLoadout.offHand : attackerLoadout.weapon;
+    const armorItem = defenderLoadout.body;
+    const weaponInstId = weaponItem?.id || `inst_${w.id}`;
+    const armorInstId = armorItem?.id || 'inst_body';
+
+    // 1. 检查是否已被长枪击退打阻
     if (att.failNext) {
       att.failNext = false;
-      pushEvent(roundNumber, side, 'attack', w.name, 'repelled', 0, []);
+      const repelSourceEvtId = (side === 'player' ? playerRepelApplyEventId : enemyRepelApplyEventId) || undefined;
+      if (side === 'player') playerRepelApplyEventId = null;
+      else enemyRepelApplyEventId = null;
+
+      const triggerEvt = pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        actor: side,
+        target: side,
+        eventType: 'STATUS_TRIGGER',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: `repel_${side}_r${roundNumber}`,
+          statusType: 'REPEL',
+          operation: 'TRIGGER',
+          sourceEventId: repelSourceEvtId,
+          holder: side,
+          effectParams: { attackFailed: true },
+        },
+        reasons: [{ code: 'ATTACK_REPELLED', sourceSide: oppSide }],
+      });
+
+      pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: triggerEvt.eventId,
+        actor: side,
+        target: side,
+        eventType: 'STATUS_REMOVE',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: `repel_${side}_r${roundNumber}`,
+          statusType: 'REPEL',
+          operation: 'REMOVE',
+          sourceEventId: repelSourceEvtId,
+          holder: side,
+        },
+        reasons: [{ code: 'STATUS_EXPIRED', sourceSide: side }],
+      });
+
+      pushLegacyEvent(roundNumber, side, 'attack', w.name, 'repelled', 0, []);
       return;
     }
 
+    // 2. 发起攻击 ATTACK
+    const attackReasons: TimelineReasonItem[] = [
+      {
+        code: actionKind === 'COUNTER'
+          ? 'ACTION_PARRY_COUNTER'
+          : (actionKind === 'COMBO' ? 'ACTION_COMBO' : (isOffhand ? 'ACTION_OFFHAND' : 'ACTION_MAIN_WEAPON')),
+        sourceSide: side,
+        sourceSlot,
+        sourceItemId: w.id,
+        sourceItemInstanceId: weaponInstId,
+        sourceName: w.name,
+      },
+    ];
+
+    const attackEvt = pushTimeline({
+      actionId: currentActionId,
+      roundNumber,
+      parentEventId: parentAttackEvtId,
+      actor: side,
+      target: oppSide,
+      eventType: 'ATTACK',
+      actionKind,
+      damage: 0,
+      wasCrit: false,
+      stateBefore: currentResources(),
+      stateAfter: currentResources(),
+      reasons: attackReasons,
+    });
+
     let hit = w.hit - dfd.dodgeSelf - att.hitDebuff;
+    let vsKindBonus = 0;
     if (w.vsKind && dfd.weapon.class === w.vsKind) {
-      hit += w.vsHit ?? 0;
+      vsKindBonus = w.vsHit ?? 0;
+      hit += vsKindBonus;
     }
+    const currentHitDebuff = att.hitDebuff;
     att.hitDebuff = 0;
 
     if (dfd.exposed) {
       hit = 100;
     }
 
-    // 1. 命中判定
-    if (rng.next() * 100 >= hit) {
-      pushEvent(roundNumber, side, 'attack', w.name, 'miss', 0, []);
+    const hitRoll = rng.next() * 100;
+
+    // 3. 命中判定
+    if (hitRoll >= hit) {
+      // 未命中
+      const reasons: TimelineReasonItem[] = [];
+      if (dfd.dodgeSelf > 0) {
+        reasons.push({
+          code: 'DEF_DODGE',
+          sourceSide: oppSide,
+          sourceSlot: 'body',
+          sourceItemId: defenderLoadout.body?.itemId,
+          sourceItemInstanceId: armorInstId,
+          sourceName: defenderLoadout.body?.name || '甲胄',
+          params: { dodgeRatePercent: dfd.dodgeSelf },
+        });
+      }
+      reasons.push({
+        code: 'ACTION_MISS',
+        sourceSide: side,
+        params: { hitRatePercent: hit, rollValue: Math.round(hitRoll) },
+      });
+
+      pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: attackEvt.eventId,
+        actor: side,
+        target: oppSide,
+        eventType: 'ATTACK_RESULT',
+        actionKind,
+        outcome: 'MISS',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        reasons,
+      });
+
+      pushLegacyEvent(roundNumber, side, 'attack', w.name, 'miss', 0, []);
       return;
     }
 
-    // 2. 格挡判定
+    // 4. 格挡判定
     if (!dfd.exposed && rng.next() < dfd.block) {
-      dfd.sta -= Math.max(0, Math.floor(w.cost / 2) + dfd.blockCostMod);
+      const shieldCost = Math.max(0, Math.floor(w.cost / 2) + dfd.blockCostMod);
       let blockDmg = 0;
       const triggers: string[] = [];
 
-      if (rng.next() < 0.3) {
-        att.hitDebuff = 20; // 格挡推撞
-        triggers.push('push');
-      }
+      const beforeBlockRes = currentResources();
       if (w.class === 'blunt') {
         blockDmg = 5; // 钝器格挡仍受 5 点震伤
         dfd.hp = Math.max(0, dfd.hp - blockDmg);
       }
+      const afterDmgRes = currentResources();
 
-      pushEvent(roundNumber, side, 'attack', w.name, 'blocked', blockDmg, triggers);
-      return;
-    }
+      const blockReasons: TimelineReasonItem[] = [
+        {
+          code: dfd.shield ? 'DEF_SHIELD_BLOCK' : 'DEF_BASE_BLOCK',
+          sourceSide: oppSide,
+          sourceSlot: dfd.shield ? 'offHand' : undefined,
+          sourceItemId: defenderLoadout.offHand?.itemId,
+          sourceItemInstanceId: defenderLoadout.offHand?.id,
+          sourceName: defenderLoadout.offHand?.name || '格挡',
+          params: { blockRatePercent: Math.round(dfd.block * 100) },
+        },
+      ];
 
-    // 3. 护心镜刺击弹开
-    if (w.pierce && dfd.originalSnapshot.loadout?.body?.itemId === 'mingguang' && rng.next() < 0.25) {
-      pushEvent(roundNumber, side, 'attack', w.name, 'mirror', 0, []);
-      return;
-    }
-
-    // 4. 结算伤害
-    let baseDmg = resolveDamage(w, getArmorFinal(dfd.originalSnapshot.loadout?.body?.itemId || 'buyi', dfd.originalSnapshot.loadout?.body?.upgrade), dmgScale);
-    let outcome = 'hit';
-    const diff = w.p - getArmorFinal(dfd.originalSnapshot.loadout?.body?.itemId || 'buyi', dfd.originalSnapshot.loadout?.body?.upgrade).a;
-
-    if (diff === -1) {
-      outcome = 'grazed';
-    } else if (diff <= -2) {
       if (w.class === 'blunt') {
-        outcome = 'shock'; // 钝器震伤 8
-      } else {
-        outcome = 'grazed';
-        baseDmg = rng.int(1, 3); // 刃兵不破刮痕 1-3
+        blockReasons.push({
+          code: 'DMG_BLOCKED_REMNANT',
+          sourceSide: side,
+          sourceSlot,
+          sourceItemId: w.id,
+          sourceItemInstanceId: weaponInstId,
+          sourceName: w.name,
+          params: { fixedShockDmg: 5 },
+        });
+      }
+
+      const resultEvt = pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: attackEvt.eventId,
+        actor: side,
+        target: oppSide,
+        eventType: 'ATTACK_RESULT',
+        actionKind,
+        outcome: 'BLOCKED',
+        damage: blockDmg,
+        wasCrit: false,
+        stateBefore: beforeBlockRes,
+        stateAfter: afterDmgRes,
+        reasons: blockReasons,
+      });
+
+      // 记录守方格挡消耗体力
+      if (shieldCost > 0) {
+        const beforeStaRes = currentResources();
+        dfd.sta -= shieldCost;
+        const afterStaRes = currentResources();
+
+        pushTimeline({
+          actionId: currentActionId,
+          roundNumber,
+          parentEventId: resultEvt.eventId,
+          actor: oppSide,
+          target: oppSide,
+          eventType: 'STAMINA_CHANGE',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: beforeStaRes,
+          stateAfter: afterStaRes,
+          reasons: [
+            {
+              code: 'STAMINA_COST_BLOCK',
+              sourceSide: oppSide,
+              params: { staminaDelta: -shieldCost },
+            },
+          ],
+        });
+      }
+
+      // 盾牌推撞判定
+      if (rng.next() < 0.3) {
+        att.hitDebuff = 20;
+        triggers.push('push');
+        pushTimeline({
+          actionId: currentActionId,
+          roundNumber,
+          parentEventId: resultEvt.eventId,
+          actor: oppSide,
+          target: side,
+          eventType: 'STATUS_APPLY',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: currentResources(),
+          stateAfter: currentResources(),
+          statusDetail: {
+            statusId: `push_${side}_r${roundNumber}`,
+            statusType: 'PUSH_DEBUFF',
+            operation: 'APPLY',
+            sourceEventId: resultEvt.eventId,
+            holder: side,
+            effectParams: { hitDebuffPp: 20 },
+          },
+          reasons: [
+            {
+              code: 'STATUS_PUSH_TRIGGERED',
+              sourceSide: oppSide,
+              sourceSlot: dfd.shield ? 'offHand' : undefined,
+              sourceName: defenderLoadout.offHand?.name || '盾击',
+            },
+          ],
+        });
+      }
+
+      pushLegacyEvent(roundNumber, side, 'attack', w.name, 'blocked', blockDmg, triggers);
+      return;
+    }
+
+    // 5. 护心镜刺击弹开
+    if (w.pierce && defenderLoadout.body?.itemId === 'mingguang' && rng.next() < 0.25) {
+      pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: attackEvt.eventId,
+        actor: side,
+        target: oppSide,
+        eventType: 'ATTACK_RESULT',
+        actionKind,
+        outcome: 'MIRROR_DEFLECT',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        reasons: [
+          {
+            code: 'DMG_MIRROR_DEFLECT',
+            sourceSide: oppSide,
+            sourceSlot: 'body',
+            sourceItemId: 'mingguang',
+            sourceItemInstanceId: armorInstId,
+            sourceName: defenderLoadout.body?.name || '明光铠',
+          },
+        ],
+      });
+
+      pushLegacyEvent(roundNumber, side, 'attack', w.name, 'mirror', 0, []);
+      return;
+    }
+
+    // 6. 伤害结算
+    const targetArmor = getArmorFinal(defenderLoadout.body?.itemId || 'buyi', defenderLoadout.body?.upgrade);
+    const resolved = resolveDamage(w, targetArmor, dmgScale);
+    let finalDmg = resolved.dmg;
+    let outcomeStr = 'hit';
+    let outcomeType: TimelineOutcomeType = resolved.outcomeType;
+
+    if (resolved.outcomeType === 'SHOCK') {
+      outcomeStr = 'shock';
+    } else if (resolved.outcomeType === 'GRAZED') {
+      outcomeStr = 'grazed';
+      if (resolved.penDiff <= -2) {
+        finalDmg = rng.int(1, 3); // 刃兵不破刮蹭 1-3
       }
     }
 
-    dfd.hp = Math.max(0, dfd.hp - baseDmg);
-    pushEvent(roundNumber, side, 'attack', w.name, outcome, baseDmg, []);
+    const stateBeforeDmg = currentResources();
+    dfd.hp = Math.max(0, dfd.hp - finalDmg);
+    const stateAfterDmg = currentResources();
+
+    let reasonCode = 'DMG_PENETRATE';
+    if (outcomeType === 'SHOCK') reasonCode = 'DMG_BLUNT_SHOCK';
+    else if (outcomeType === 'GRAZED') reasonCode = 'DMG_GRAZED';
+
+    const resultEvt = pushTimeline({
+      actionId: currentActionId,
+      roundNumber,
+      parentEventId: attackEvt.eventId,
+      actor: side,
+      target: oppSide,
+      eventType: 'ATTACK_RESULT',
+      actionKind,
+      outcome: outcomeType,
+      damage: finalDmg,
+      wasCrit: false,
+      stateBefore: stateBeforeDmg,
+      stateAfter: stateAfterDmg,
+      reasons: [
+        {
+          code: reasonCode,
+          sourceSide: side,
+          sourceSlot,
+          sourceItemId: w.id,
+          sourceItemInstanceId: weaponInstId,
+          sourceName: w.name,
+          params: {
+            p: w.p,
+            a: targetArmor.a,
+            penDiff: resolved.penDiff,
+            rawDmg: resolved.rawDmg,
+            armorReduce: resolved.armorReduce,
+          },
+        },
+      ],
+    });
+
+    pushLegacyEvent(roundNumber, side, 'attack', w.name, outcomeStr, finalDmg, []);
 
     if (dfd.hp <= 0) return;
 
-    // 5. 事件触发
+    // 7. 特殊状态触发
     const triggers: string[] = [];
     if (w.stun > 0 && rng.next() < w.stun) {
       dfd.skip = true;
       triggers.push('stun');
+      const stunEvt = pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: resultEvt.eventId,
+        actor: side,
+        target: oppSide,
+        eventType: 'STATUS_APPLY',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: `stun_${oppSide}_r${roundNumber}`,
+          statusType: 'STUN',
+          operation: 'APPLY',
+          sourceEventId: resultEvt.eventId,
+          holder: oppSide,
+          effectParams: { skipAction: true },
+        },
+        reasons: [
+          {
+            code: 'STATUS_STUN_TRIGGERED',
+            sourceSide: side,
+            sourceSlot,
+            sourceItemId: w.id,
+            sourceItemInstanceId: weaponInstId,
+            sourceName: w.name,
+          },
+        ],
+      });
+      if (oppSide === 'player') playerStunApplyEventId = stunEvt.eventId;
+      else enemyStunApplyEventId = stunEvt.eventId;
     }
+
     if (w.repel > 0 && dfd.weapon.repelImmuneVs !== w.class && rng.next() < w.repel) {
       dfd.failNext = true;
       triggers.push('repel');
+      const repelEvt = pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: resultEvt.eventId,
+        actor: side,
+        target: oppSide,
+        eventType: 'STATUS_APPLY',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: `repel_${oppSide}_r${roundNumber}`,
+          statusType: 'REPEL',
+          operation: 'APPLY',
+          sourceEventId: resultEvt.eventId,
+          holder: oppSide,
+          effectParams: { attackFailed: true },
+        },
+        reasons: [
+          {
+            code: 'STATUS_REPEL_TRIGGERED',
+            sourceSide: side,
+            sourceSlot,
+            sourceItemId: w.id,
+            sourceItemInstanceId: weaponInstId,
+            sourceName: w.name,
+          },
+        ],
+      });
+      if (oppSide === 'player') playerRepelApplyEventId = repelEvt.eventId;
+      else enemyRepelApplyEventId = repelEvt.eventId;
     }
 
     if (triggers.length > 0) {
-      pushEvent(roundNumber, side, 'trigger', w.name, 'effect', 0, triggers);
+      pushLegacyEvent(roundNumber, side, 'trigger', w.name, 'effect', 0, triggers);
     }
 
-    // 6. 连击判定（仅限第一段命中且非格挡/未死）
-    if (w.combo > 0 && rng.next() < w.combo) {
-      if (rng.next() * 100 < hit) {
-        const comboDmg = resolveDamage(w, getArmorFinal(dfd.originalSnapshot.loadout?.body?.itemId || 'buyi', dfd.originalSnapshot.loadout?.body?.upgrade), dmgScale);
-        dfd.hp = Math.max(0, dfd.hp - comboDmg);
-        pushEvent(roundNumber, side, 'attack', w.name, 'combo', comboDmg, ['combo']);
-      }
+    // 8. 连击判定
+    if (w.combo > 0 && actionKind !== 'COMBO' && rng.next() < w.combo) {
+      strike(att, dfd, w, dmgScale, side, 'COMBO', resultEvt.eventId);
     }
 
     if (dfd.hp <= 0) return;
 
-    // 7. 招架反击（防守方触发）
+    // 9. 招架反击（防守方触发）
     const dw = dfd.weapon;
-    if (dw.parry > 0 && !dfd.skip && rng.next() < dw.parry) {
+    if (dw.parry > 0 && !dfd.skip && actionKind !== 'COUNTER' && rng.next() < dw.parry) {
       const phit = dw.hit - att.dodgeSelf;
       if (rng.next() * 100 < phit) {
-        const parryScale = dw.parryDmgScale ?? 1.0;
-        const parryDmg = resolveDamage(dw, getArmorFinal(att.originalSnapshot.loadout?.body?.itemId || 'buyi', att.originalSnapshot.loadout?.body?.upgrade), parryScale);
-        att.hp = Math.max(0, att.hp - parryDmg);
-        pushEvent(roundNumber, side, 'attack', dw.name, 'parry_counter', parryDmg, ['parry']);
+        strike(dfd, att, dw, dw.parryDmgScale ?? 1.0, oppSide, 'COUNTER', resultEvt.eventId);
       }
     }
   };
 
   const takeTurn = (f: FighterState, opp: FighterState, side: SideKey) => {
+    const oppSide: SideKey = side === 'player' ? 'enemy' : 'player';
+
     // 1. 破绽检查
     if (f.sta <= 0 && !f.exposed) {
       f.exposed = true;
       f.skip = true;
       f.sta = 40; // 破绽结束后回到 40 防连破
-      pushEvent(roundNumber, side, 'exposed', '自身', 'exposed', 0, []);
+      actionSeq += 1;
+      const actId = `act_r${roundNumber}_${actionSeq}`;
+
+      const expEvt = pushTimeline({
+        actionId: actId,
+        roundNumber,
+        actor: side,
+        target: side,
+        eventType: 'STATUS_APPLY',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: `exposed_${side}_r${roundNumber}`,
+          statusType: 'EXPOSED',
+          operation: 'APPLY',
+          holder: side,
+          effectParams: { skipAction: true },
+        },
+        reasons: [{ code: 'SKIP_EXPOSED', sourceSide: side }],
+      });
+      if (side === 'player') playerExposedApplyEventId = expEvt.eventId;
+      else enemyExposedApplyEventId = expEvt.eventId;
+
+      pushLegacyEvent(roundNumber, side, 'exposed', '自身', 'exposed', 0, []);
       return;
     }
 
     // 2. 震慑跳过 / 破绽跳过
     if (f.skip) {
       f.skip = false;
+      const wasExposed = f.exposed;
       f.exposed = false;
-      f.sta = Math.min(f.staMax, f.sta + f.regen); // 全额回复
-      pushEvent(roundNumber, side, 'recover', '自身', 'recover', 0, []);
+      actionSeq += 1;
+      const actId = `act_r${roundNumber}_${actionSeq}`;
+
+      const stunSourceEvtId = (side === 'player' ? playerStunApplyEventId : enemyStunApplyEventId) || undefined;
+      const exposedSourceEvtId = (side === 'player' ? playerExposedApplyEventId : enemyExposedApplyEventId) || undefined;
+      if (side === 'player') {
+        playerStunApplyEventId = null;
+        playerExposedApplyEventId = null;
+      } else {
+        enemyStunApplyEventId = null;
+        enemyExposedApplyEventId = null;
+      }
+
+      if (wasExposed) {
+        pushTimeline({
+          actionId: actId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STATUS_TRIGGER',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: currentResources(),
+          stateAfter: currentResources(),
+          statusDetail: {
+            statusId: `exposed_${side}_r${roundNumber}`,
+            statusType: 'EXPOSED',
+            operation: 'TRIGGER',
+            sourceEventId: exposedSourceEvtId,
+            holder: side,
+          },
+          reasons: [{ code: 'SKIP_EXPOSED', sourceSide: side }],
+        });
+        pushTimeline({
+          actionId: actId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STATUS_REMOVE',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: currentResources(),
+          stateAfter: currentResources(),
+          statusDetail: {
+            statusId: `exposed_${side}_r${roundNumber}`,
+            statusType: 'EXPOSED',
+            operation: 'REMOVE',
+            sourceEventId: exposedSourceEvtId,
+            holder: side,
+          },
+          reasons: [{ code: 'STATUS_EXPIRED', sourceSide: side }],
+        });
+      } else {
+        pushTimeline({
+          actionId: actId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STATUS_TRIGGER',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: currentResources(),
+          stateAfter: currentResources(),
+          statusDetail: {
+            statusId: `stun_${side}_r${roundNumber}`,
+            statusType: 'STUN',
+            operation: 'TRIGGER',
+            sourceEventId: stunSourceEvtId,
+            holder: side,
+            effectParams: { skipAction: true },
+          },
+          reasons: [{ code: 'SKIP_STUNNED', sourceSide: side }],
+        });
+        pushTimeline({
+          actionId: actId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STATUS_REMOVE',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: currentResources(),
+          stateAfter: currentResources(),
+          statusDetail: {
+            statusId: `stun_${side}_r${roundNumber}`,
+            statusType: 'STUN',
+            operation: 'REMOVE',
+            sourceEventId: stunSourceEvtId,
+            holder: side,
+          },
+          reasons: [{ code: 'STATUS_EXPIRED', sourceSide: side }],
+        });
+      }
+
+      // 调息回体
+      const beforeRes = currentResources();
+      const regenDelta = Math.min(f.staMax - f.sta, f.regen);
+      f.sta = Math.min(f.staMax, f.sta + f.regen);
+      const afterRes = currentResources();
+
+      pushTimeline({
+        actionId: actId,
+        roundNumber,
+        actor: side,
+        target: side,
+        eventType: 'RECOVER_REST',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: beforeRes,
+        stateAfter: beforeRes,
+        reasons: [{ code: 'REST_RECOVERING', sourceSide: side }],
+      });
+
+      if (regenDelta > 0) {
+        pushTimeline({
+          actionId: actId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STAMINA_CHANGE',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: beforeRes,
+          stateAfter: afterRes,
+          reasons: [
+            {
+              code: 'STAMINA_REGEN_FULL',
+              sourceSide: side,
+              sourceSlot: 'body',
+              params: { staminaDelta: regenDelta },
+            },
+          ],
+        });
+      }
+
+      pushLegacyEvent(roundNumber, side, 'recover', '自身', 'recover', 0, []);
       return;
     }
 
     // 3. 蓄力冷却期
     if (f.cd > 0) {
       f.cd -= 1;
-      f.sta = Math.min(f.staMax, f.sta + f.regen); // 全额回复
-      pushEvent(roundNumber, side, 'recover', '自身', 'recover', 0, []);
+      actionSeq += 1;
+      const actId = `act_r${roundNumber}_${actionSeq}`;
+
+      const beforeRes = currentResources();
+      const regenDelta = Math.min(f.staMax - f.sta, f.regen);
+      f.sta = Math.min(f.staMax, f.sta + f.regen);
+      const afterRes = currentResources();
+
+      pushTimeline({
+        actionId: actId,
+        roundNumber,
+        actor: side,
+        target: side,
+        eventType: 'RECOVER_REST',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: beforeRes,
+        stateAfter: beforeRes,
+        reasons: [{ code: 'REST_COOLDOWN', sourceSide: side }],
+      });
+
+      if (regenDelta > 0) {
+        pushTimeline({
+          actionId: actId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STAMINA_CHANGE',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: beforeRes,
+          stateAfter: afterRes,
+          reasons: [
+            {
+              code: 'STAMINA_REGEN_FULL',
+              sourceSide: side,
+              sourceSlot: 'body',
+              params: { staminaDelta: regenDelta },
+            },
+          ],
+        });
+      }
+
+      pushLegacyEvent(roundNumber, side, 'recover', '自身', 'recover', 0, []);
       return;
     }
 
     // 4. 攻击回合
-    strike(f, opp, f.weapon, 1.0, side);
-    f.sta -= f.weapon.cost;
+    strike(f, opp, f.weapon, 1.0, side, 'NORMAL');
 
-    if (f.offhand) {
-      strike(f, opp, f.offhand, 0.8, side);
+    // 扣除主手耗体
+    const beforeMainCost = currentResources();
+    f.sta -= f.weapon.cost;
+    const afterMainCost = currentResources();
+    actionSeq += 1;
+    const costActId = `act_r${roundNumber}_${actionSeq}`;
+
+    pushTimeline({
+      actionId: costActId,
+      roundNumber,
+      actor: side,
+      target: side,
+      eventType: 'STAMINA_CHANGE',
+      damage: 0,
+      wasCrit: false,
+      stateBefore: beforeMainCost,
+      stateAfter: afterMainCost,
+      reasons: [
+        {
+          code: 'STAMINA_COST_ATTACK',
+          sourceSide: side,
+          sourceSlot: 'weapon',
+          sourceItemId: f.weapon.id,
+          sourceName: f.weapon.name,
+          params: { staminaDelta: -f.weapon.cost },
+        },
+      ],
+    });
+
+    if (f.offhand && opp.hp > 0) {
+      strike(f, opp, f.offhand, 0.8, side, 'OFFHAND');
+      const beforeOffCost = currentResources();
       f.sta -= f.offhand.cost;
+      const afterOffCost = currentResources();
+      actionSeq += 1;
+      const offCostActId = `act_r${roundNumber}_${actionSeq}`;
+      pushTimeline({
+        actionId: offCostActId,
+        roundNumber,
+        actor: side,
+        target: side,
+        eventType: 'STAMINA_CHANGE',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: beforeOffCost,
+        stateAfter: afterOffCost,
+        reasons: [
+          {
+            code: 'STAMINA_COST_ATTACK',
+            sourceSide: side,
+            sourceSlot: 'offHand',
+            sourceItemId: f.offhand.id,
+            sourceName: f.offhand.name,
+            params: { staminaDelta: -f.offhand.cost },
+          },
+        ],
+      });
     }
 
     f.cd = f.weapon.interval - 1;
-    f.sta = Math.min(f.staMax, f.sta + Math.floor(f.regen / 2)); // 攻击回合回复减半
+
+    // 攻击回合回复减半
+    const halfRegen = Math.floor(f.regen / 2);
+    if (halfRegen > 0) {
+      const beforeRegen = currentResources();
+      const actualRegen = Math.min(f.staMax - f.sta, halfRegen);
+      f.sta = Math.min(f.staMax, f.sta + halfRegen);
+      const afterRegen = currentResources();
+
+      if (actualRegen > 0) {
+        actionSeq += 1;
+        const regenActId = `act_r${roundNumber}_${actionSeq}`;
+        pushTimeline({
+          actionId: regenActId,
+          roundNumber,
+          actor: side,
+          target: side,
+          eventType: 'STAMINA_CHANGE',
+          damage: 0,
+          wasCrit: false,
+          stateBefore: beforeRegen,
+          stateAfter: afterRegen,
+          reasons: [
+            {
+              code: 'STAMINA_REGEN_HALF',
+              sourceSide: side,
+              sourceSlot: 'body',
+              params: { staminaDelta: actualRegen },
+            },
+          ],
+        });
+      }
+    }
   };
 
   // 主对局循环 (最高300回合)
@@ -504,7 +1277,6 @@ export function simulateBattleV2(input: {
     if (pPrio !== ePrio) {
       order = pPrio < ePrio ? [player, enemy] : [enemy, player];
     } else {
-      // 优先级相同，使用 Seeded RNG 随机先手
       order = rng.next() < 0.5 ? [player, enemy] : [enemy, player];
     }
 
@@ -526,7 +1298,6 @@ export function simulateBattleV2(input: {
   } else if (player.hp <= 0) {
     winner = 'enemy';
   } else {
-    // 超过300回合，血量高者胜，血量同则平
     winner = player.hp === enemy.hp ? 'draw' : (player.hp > enemy.hp ? 'player' : 'enemy');
   }
 
@@ -534,6 +1305,9 @@ export function simulateBattleV2(input: {
 
   return {
     schemaVersion: 2,
+    timelineSchemaVersion: 1,
+    initialState,
+    timelineEvents,
     context: input.context,
     seedPublicHash: seedPublicHash(input.seed),
     winner,
