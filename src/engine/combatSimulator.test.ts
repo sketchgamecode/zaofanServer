@@ -236,5 +236,69 @@ describe('combatSimulator Sancai V1', () => {
     expect(lastEvent.stateAfter.player.hp).toBe(result.player.hpEnd);
     expect(lastEvent.stateAfter.enemy.hp).toBe(result.enemy.hpEnd);
   });
+
+  it('passes 30 offline battles with zero stamina gaps and stable statusIds', () => {
+    const chui = {
+      id: 'eq_chui_30',
+      name: '骨朵锤',
+      description: '锤',
+      slot: 'weapon' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'chui_guduo',
+      material: 'chaogang',
+    };
+    const zhajia = {
+      id: 'eq_zhajia_30',
+      name: '铁札甲',
+      description: '札甲',
+      slot: 'body' as const,
+      rarity: 1 as const,
+      sellPrice: 0,
+      bonusAttributes: {},
+      itemId: 'zhajia',
+      upgrade: null,
+    };
+    const loadout: CombatantSnapshotLoadout = { weapon: chui, offHand: null, body: zhajia };
+
+    for (let b = 0; b < 30; b++) {
+      const result = simulateBattleV2({
+        player: fighter(`p_${b}`, 'CLASS_E', loadout),
+        enemy: fighter(`e_${b}`, 'CLASS_A', loadout),
+        seed: `blunt_${b}`,
+        context: 'ARENA',
+      });
+
+      const events = result.timelineEvents!;
+      const init = result.initialState!;
+
+      // 1. 严格检查事件间资源无缝连续（包括破绽前后、耗体回体）
+      for (let i = 0; i < events.length; i++) {
+        const evt = events[i];
+        const prevRes = i === 0
+          ? { player: { hp: init.player.hp, stamina: init.player.stamina }, enemy: { hp: init.enemy.hp, stamina: init.enemy.stamina } }
+          : events[i - 1].stateAfter;
+
+        expect(evt.stateBefore.player.hp).toBe(prevRes.player.hp);
+        expect(evt.stateBefore.player.stamina).toBe(prevRes.player.stamina);
+        expect(evt.stateBefore.enemy.hp).toBe(prevRes.enemy.hp);
+        expect(evt.stateBefore.enemy.stamina).toBe(prevRes.enemy.stamina);
+      }
+
+      // 2. 检查所有状态生命周期：TRIGGER 和 REMOVE 必须与对应的 APPLY 保持完全一致的 statusId
+      const applyStatusIds = new Map<string, string>(); // statusId -> applyEventId
+      for (const evt of events) {
+        if (!evt.statusDetail) continue;
+        const { statusId, operation, sourceEventId } = evt.statusDetail;
+        if (operation === 'APPLY') {
+          applyStatusIds.set(statusId, evt.eventId);
+        } else if (operation === 'TRIGGER' || operation === 'REMOVE') {
+          expect(applyStatusIds.has(statusId)).toBe(true);
+          expect(sourceEventId).toBe(applyStatusIds.get(statusId));
+        }
+      }
+    }
+  });
 });
 

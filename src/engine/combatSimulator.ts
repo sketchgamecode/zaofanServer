@@ -393,13 +393,14 @@ export function simulateBattleV2(input: {
   let eventSeq = 0;
   let actionSeq = 0;
 
-  // 状态追踪
-  let playerStunApplyEventId: string | null = null;
-  let enemyStunApplyEventId: string | null = null;
-  let playerRepelApplyEventId: string | null = null;
-  let enemyRepelApplyEventId: string | null = null;
-  let playerExposedApplyEventId: string | null = null;
-  let enemyExposedApplyEventId: string | null = null;
+  // 状态生命周期追踪
+  interface ActiveStatusTracker {
+    statusId: string;
+    applyEventId: string;
+  }
+  const activeStuns: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
+  const activeRepels: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
+  const activeExposed: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
 
   const currentResources = (): CombatantResourcePair => ({
     player: { hp: player.hp, stamina: player.sta },
@@ -489,9 +490,10 @@ export function simulateBattleV2(input: {
     // 1. 检查是否已被长枪击退打阻
     if (att.failNext) {
       att.failNext = false;
-      const repelSourceEvtId = (side === 'player' ? playerRepelApplyEventId : enemyRepelApplyEventId) || undefined;
-      if (side === 'player') playerRepelApplyEventId = null;
-      else enemyRepelApplyEventId = null;
+      const repelTracker = activeRepels[side];
+      activeRepels[side] = null;
+      const repelSourceEvtId = repelTracker?.applyEventId || undefined;
+      const repelStatusId = repelTracker?.statusId || `repel_${side}_r${roundNumber}`;
 
       const triggerEvt = pushTimeline({
         actionId: currentActionId,
@@ -504,7 +506,7 @@ export function simulateBattleV2(input: {
         stateBefore: currentResources(),
         stateAfter: currentResources(),
         statusDetail: {
-          statusId: `repel_${side}_r${roundNumber}`,
+          statusId: repelStatusId,
           statusType: 'REPEL',
           operation: 'TRIGGER',
           sourceEventId: repelSourceEvtId,
@@ -526,7 +528,7 @@ export function simulateBattleV2(input: {
         stateBefore: currentResources(),
         stateAfter: currentResources(),
         statusDetail: {
-          statusId: `repel_${side}_r${roundNumber}`,
+          statusId: repelStatusId,
           statusType: 'REPEL',
           operation: 'REMOVE',
           sourceEventId: repelSourceEvtId,
@@ -838,6 +840,7 @@ export function simulateBattleV2(input: {
     if (w.stun > 0 && rng.next() < w.stun) {
       dfd.skip = true;
       triggers.push('stun');
+      const stunStatusId = `stun_${oppSide}_r${roundNumber}_seq${eventSeq + 1}`;
       const stunEvt = pushTimeline({
         actionId: currentActionId,
         roundNumber,
@@ -850,7 +853,7 @@ export function simulateBattleV2(input: {
         stateBefore: currentResources(),
         stateAfter: currentResources(),
         statusDetail: {
-          statusId: `stun_${oppSide}_r${roundNumber}`,
+          statusId: stunStatusId,
           statusType: 'STUN',
           operation: 'APPLY',
           sourceEventId: resultEvt.eventId,
@@ -868,13 +871,13 @@ export function simulateBattleV2(input: {
           },
         ],
       });
-      if (oppSide === 'player') playerStunApplyEventId = stunEvt.eventId;
-      else enemyStunApplyEventId = stunEvt.eventId;
+      activeStuns[oppSide] = { statusId: stunStatusId, applyEventId: stunEvt.eventId };
     }
 
     if (w.repel > 0 && dfd.weapon.repelImmuneVs !== w.class && rng.next() < w.repel) {
       dfd.failNext = true;
       triggers.push('repel');
+      const repelStatusId = `repel_${oppSide}_r${roundNumber}_seq${eventSeq + 1}`;
       const repelEvt = pushTimeline({
         actionId: currentActionId,
         roundNumber,
@@ -887,7 +890,7 @@ export function simulateBattleV2(input: {
         stateBefore: currentResources(),
         stateAfter: currentResources(),
         statusDetail: {
-          statusId: `repel_${oppSide}_r${roundNumber}`,
+          statusId: repelStatusId,
           statusType: 'REPEL',
           operation: 'APPLY',
           sourceEventId: resultEvt.eventId,
@@ -905,8 +908,7 @@ export function simulateBattleV2(input: {
           },
         ],
       });
-      if (oppSide === 'player') playerRepelApplyEventId = repelEvt.eventId;
-      else enemyRepelApplyEventId = repelEvt.eventId;
+      activeRepels[oppSide] = { statusId: repelStatusId, applyEventId: repelEvt.eventId };
     }
 
     if (triggers.length > 0) {
@@ -937,10 +939,10 @@ export function simulateBattleV2(input: {
     if (f.sta <= 0 && !f.exposed) {
       f.exposed = true;
       f.skip = true;
-      f.sta = 40; // 破绽结束后回到 40 防连破
       actionSeq += 1;
       const actId = `act_r${roundNumber}_${actionSeq}`;
 
+      const exposedStatusId = `exposed_${side}_r${roundNumber}_seq${eventSeq + 1}`;
       const expEvt = pushTimeline({
         actionId: actId,
         roundNumber,
@@ -952,7 +954,7 @@ export function simulateBattleV2(input: {
         stateBefore: currentResources(),
         stateAfter: currentResources(),
         statusDetail: {
-          statusId: `exposed_${side}_r${roundNumber}`,
+          statusId: exposedStatusId,
           statusType: 'EXPOSED',
           operation: 'APPLY',
           holder: side,
@@ -960,8 +962,33 @@ export function simulateBattleV2(input: {
         },
         reasons: [{ code: 'SKIP_EXPOSED', sourceSide: side }],
       });
-      if (side === 'player') playerExposedApplyEventId = expEvt.eventId;
-      else enemyExposedApplyEventId = expEvt.eventId;
+      activeExposed[side] = { statusId: exposedStatusId, applyEventId: expEvt.eventId };
+
+      // 准确记录体力从 <=0 重置回到 40 的资源变化事件
+      const beforeResetRes = currentResources();
+      const currentStaminaVal = f.sta;
+      f.sta = 40; // 破绽结束后回到 40 防连破
+      const afterResetRes = currentResources();
+
+      pushTimeline({
+        actionId: actId,
+        roundNumber,
+        parentEventId: expEvt.eventId,
+        actor: side,
+        target: side,
+        eventType: 'STAMINA_CHANGE',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: beforeResetRes,
+        stateAfter: afterResetRes,
+        reasons: [
+          {
+            code: 'STAMINA_EXPOSED_RESET',
+            sourceSide: side,
+            params: { staminaDelta: 40 - currentStaminaVal },
+          },
+        ],
+      });
 
       pushLegacyEvent(roundNumber, side, 'exposed', '自身', 'exposed', 0, []);
       return;
@@ -975,17 +1002,20 @@ export function simulateBattleV2(input: {
       actionSeq += 1;
       const actId = `act_r${roundNumber}_${actionSeq}`;
 
-      const stunSourceEvtId = (side === 'player' ? playerStunApplyEventId : enemyStunApplyEventId) || undefined;
-      const exposedSourceEvtId = (side === 'player' ? playerExposedApplyEventId : enemyExposedApplyEventId) || undefined;
+      const stunTracker = activeStuns[side];
+      const exposedTracker = activeExposed[side];
       if (side === 'player') {
-        playerStunApplyEventId = null;
-        playerExposedApplyEventId = null;
+        activeStuns.player = null;
+        activeExposed.player = null;
       } else {
-        enemyStunApplyEventId = null;
-        enemyExposedApplyEventId = null;
+        activeStuns.enemy = null;
+        activeExposed.enemy = null;
       }
 
       if (wasExposed) {
+        const exposedStatusId = exposedTracker?.statusId || `exposed_${side}_r${roundNumber}`;
+        const exposedSourceEvtId = exposedTracker?.applyEventId || undefined;
+
         pushTimeline({
           actionId: actId,
           roundNumber,
@@ -997,7 +1027,7 @@ export function simulateBattleV2(input: {
           stateBefore: currentResources(),
           stateAfter: currentResources(),
           statusDetail: {
-            statusId: `exposed_${side}_r${roundNumber}`,
+            statusId: exposedStatusId,
             statusType: 'EXPOSED',
             operation: 'TRIGGER',
             sourceEventId: exposedSourceEvtId,
@@ -1016,7 +1046,7 @@ export function simulateBattleV2(input: {
           stateBefore: currentResources(),
           stateAfter: currentResources(),
           statusDetail: {
-            statusId: `exposed_${side}_r${roundNumber}`,
+            statusId: exposedStatusId,
             statusType: 'EXPOSED',
             operation: 'REMOVE',
             sourceEventId: exposedSourceEvtId,
@@ -1025,6 +1055,9 @@ export function simulateBattleV2(input: {
           reasons: [{ code: 'STATUS_EXPIRED', sourceSide: side }],
         });
       } else {
+        const stunStatusId = stunTracker?.statusId || `stun_${side}_r${roundNumber}`;
+        const stunSourceEvtId = stunTracker?.applyEventId || undefined;
+
         pushTimeline({
           actionId: actId,
           roundNumber,
@@ -1036,7 +1069,7 @@ export function simulateBattleV2(input: {
           stateBefore: currentResources(),
           stateAfter: currentResources(),
           statusDetail: {
-            statusId: `stun_${side}_r${roundNumber}`,
+            statusId: stunStatusId,
             statusType: 'STUN',
             operation: 'TRIGGER',
             sourceEventId: stunSourceEvtId,
@@ -1056,7 +1089,7 @@ export function simulateBattleV2(input: {
           stateBefore: currentResources(),
           stateAfter: currentResources(),
           statusDetail: {
-            statusId: `stun_${side}_r${roundNumber}`,
+            statusId: stunStatusId,
             statusType: 'STUN',
             operation: 'REMOVE',
             sourceEventId: stunSourceEvtId,
