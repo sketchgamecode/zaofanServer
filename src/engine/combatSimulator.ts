@@ -401,6 +401,7 @@ export function simulateBattleV2(input: {
   const activeStuns: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
   const activeRepels: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
   const activeExposed: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
+  const activePushDebuffs: Record<SideKey, ActiveStatusTracker | null> = { player: null, enemy: null };
 
   const currentResources = (): CombatantResourcePair => ({
     player: { hp: player.hp, stamina: player.sta },
@@ -579,6 +580,57 @@ export function simulateBattleV2(input: {
     const currentHitDebuff = att.hitDebuff;
     att.hitDebuff = 0;
 
+    // 若受到推撞失衡影响，在此次攻击判定时消耗该状态并发出 TRIGGER / REMOVE
+    if (currentHitDebuff > 0) {
+      const pushTracker = activePushDebuffs[side];
+      activePushDebuffs[side] = null;
+      const pushStatusId = pushTracker?.statusId || `push_${side}_r${roundNumber}`;
+      const pushSourceEvtId = pushTracker?.applyEventId || undefined;
+
+      const triggerEvt = pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: attackEvt.eventId,
+        actor: side,
+        target: side,
+        eventType: 'STATUS_TRIGGER',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: pushStatusId,
+          statusType: 'PUSH_DEBUFF',
+          operation: 'TRIGGER',
+          sourceEventId: pushSourceEvtId,
+          holder: side,
+          effectParams: { hitDebuffPp: currentHitDebuff },
+        },
+        reasons: [{ code: 'MOD_PUSH_DEBUFF', sourceSide: oppSide }],
+      });
+
+      pushTimeline({
+        actionId: currentActionId,
+        roundNumber,
+        parentEventId: triggerEvt.eventId,
+        actor: side,
+        target: side,
+        eventType: 'STATUS_REMOVE',
+        damage: 0,
+        wasCrit: false,
+        stateBefore: currentResources(),
+        stateAfter: currentResources(),
+        statusDetail: {
+          statusId: pushStatusId,
+          statusType: 'PUSH_DEBUFF',
+          operation: 'REMOVE',
+          sourceEventId: pushSourceEvtId,
+          holder: side,
+        },
+        reasons: [{ code: 'STATUS_EXPIRED', sourceSide: side }],
+      });
+    }
+
     if (dfd.exposed) {
       hit = 100;
     }
@@ -710,7 +762,34 @@ export function simulateBattleV2(input: {
       if (rng.next() < 0.3) {
         att.hitDebuff = 20;
         triggers.push('push');
-        pushTimeline({
+
+        // 如果之前已有未消耗的推撞失衡，先清除旧效果
+        if (activePushDebuffs[side]) {
+          const oldTracker = activePushDebuffs[side]!;
+          pushTimeline({
+            actionId: currentActionId,
+            roundNumber,
+            parentEventId: resultEvt.eventId,
+            actor: side,
+            target: side,
+            eventType: 'STATUS_REMOVE',
+            damage: 0,
+            wasCrit: false,
+            stateBefore: currentResources(),
+            stateAfter: currentResources(),
+            statusDetail: {
+              statusId: oldTracker.statusId,
+              statusType: 'PUSH_DEBUFF',
+              operation: 'REMOVE',
+              sourceEventId: oldTracker.applyEventId,
+              holder: side,
+            },
+            reasons: [{ code: 'STATUS_EXPIRED', sourceSide: side }],
+          });
+        }
+
+        const pushStatusId = `push_${side}_r${roundNumber}_seq${eventSeq + 1}`;
+        const pushEvt = pushTimeline({
           actionId: currentActionId,
           roundNumber,
           parentEventId: resultEvt.eventId,
@@ -722,7 +801,7 @@ export function simulateBattleV2(input: {
           stateBefore: currentResources(),
           stateAfter: currentResources(),
           statusDetail: {
-            statusId: `push_${side}_r${roundNumber}`,
+            statusId: pushStatusId,
             statusType: 'PUSH_DEBUFF',
             operation: 'APPLY',
             sourceEventId: resultEvt.eventId,
@@ -738,6 +817,7 @@ export function simulateBattleV2(input: {
             },
           ],
         });
+        activePushDebuffs[side] = { statusId: pushStatusId, applyEventId: pushEvt.eventId };
       }
 
       pushLegacyEvent(roundNumber, side, 'attack', w.name, 'blocked', blockDmg, triggers);
