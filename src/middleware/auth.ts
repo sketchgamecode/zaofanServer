@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getRequestMetadata, logServerEvent } from '../lib/observability.js';
 import { supabaseAdmin } from '../lib/supabase.js';
+import { isUpstreamFailure } from '../lib/authProxy.js';
 
 /**
  * Require a valid Supabase bearer token and attach the user to req.user.
@@ -21,15 +22,44 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       'error',
     );
 
-    res.status(401).json({ error: 'Unauthorized: missing Authorization header' });
+    res.status(401).json({
+      error: 'TOKEN_INVALID',
+      message: 'Missing Authorization header',
+      requestId: requestMeta.requestId,
+    });
     return;
   }
 
   const token = authHeader.replace('Bearer ', '');
-  const {
-    data: { user },
-    error,
-  } = await supabaseAdmin.auth.getUser(token);
+  let user: any = null;
+  let error: unknown = null;
+  try {
+    const result = await supabaseAdmin.auth.getUser(token);
+    user = result.data.user;
+    error = result.error;
+  } catch (thrown) {
+    error = thrown;
+  }
+
+  if (error && isUpstreamFailure(error)) {
+    logServerEvent(
+      'auth_upstream_unavailable',
+      {
+        ...requestMeta,
+        ok: false,
+        errorCode: 'AUTH_UPSTREAM_UNAVAILABLE',
+        message: error instanceof Error ? error.message : String(error),
+      },
+      'error',
+    );
+
+    res.status(503).json({
+      error: 'AUTH_UPSTREAM_UNAVAILABLE',
+      message: 'Auth service is temporarily unavailable. Please retry.',
+      requestId: requestMeta.requestId,
+    });
+    return;
+  }
 
   if (error || !user) {
     logServerEvent(
@@ -37,13 +67,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       {
         ...requestMeta,
         ok: false,
-        errorCode: 'UNAUTHORIZED',
+        errorCode: 'TOKEN_INVALID',
         message: 'Supabase token is invalid or expired',
       },
       'error',
     );
 
-    res.status(401).json({ error: 'Unauthorized: token is invalid or expired' });
+    res.status(401).json({
+      error: 'TOKEN_INVALID',
+      message: 'Access token is invalid or expired',
+      requestId: requestMeta.requestId,
+    });
     return;
   }
 

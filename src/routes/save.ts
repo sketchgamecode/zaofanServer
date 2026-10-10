@@ -22,8 +22,14 @@ router.get('/', requireAuth, async (req: Request, res: Response): Promise<void> 
       await saveGameState(userId, loadResult.state, now);
     }
 
+    // Client view: `world` is global server-side state (all world actors with combat
+    // snapshots) and is the bulk of the payload. The client does not read it.
+    // Use `?view=full` only for debugging.
+    const { world: _world, ...clientSave } = loadResult.state;
+    const save = req.query.view === 'full' ? loadResult.state : clientSave;
+
     res.json({
-      save: loadResult.state,
+      save,
       saveVersion: loadResult.state.meta.schemaVersion,
       updatedAt: new Date(loadResult.state.meta.updatedAt).toISOString(),
     });

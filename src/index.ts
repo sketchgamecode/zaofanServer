@@ -2,7 +2,9 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
 
+import authRouter from './routes/auth.js';
 import saveRouter from './routes/save.js';
 import adminRouter from './routes/admin.js';
 import actionRouter from './routes/action.js';
@@ -50,8 +52,11 @@ app.use(
       callback(new Error(`CORS blocked: origin ${origin} is not in ALLOWED_ORIGINS`));
     },
     credentials: true,
+    exposedHeaders: ['x-request-id'],
   }),
 );
+// Standard HTTP compression negotiation: only compresses when the client sends Accept-Encoding.
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => {
@@ -64,6 +69,7 @@ app.get('/health', (_req, res) => {
   });
 });
 
+app.use('/api/auth', authRouter);
 app.use('/api/save', saveRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/action', actionRouter);
