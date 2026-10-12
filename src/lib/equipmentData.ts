@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { GameState } from '../types/gameState.js';
+import type { GameState, EquipmentItem, WeaponCombatProfile, WeaponTraitItem, WeaponRhythmProfile } from '../types/gameState.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -614,20 +614,340 @@ export function normalizeItemName(item: { name?: string; craft?: string | null }
   }
 }
 
-/** 动态为装备对象补全/同步最新的 iconId 及纠正汉字名称 */
+/** 武器类别汉字映射 */
+const WEAPON_CLASS_NAMES: Record<string, string> = {
+  blade: '刀',
+  sword: '剑',
+  spear: '枪',
+  blunt: '钝器',
+  bow: '弓',
+  fist: '拳/徒手',
+};
+
+const RARITY_NAMES: Record<number, string> = {
+  0: '凡品',
+  1: '良品',
+  2: '精品',
+  3: '绝品',
+  4: '名器',
+};
+
+/** 构建武器战斗详情画像 (WeaponCombatProfile) */
+export function buildWeaponCombatProfile(
+  item: {
+    itemId?: string;
+    id?: string;
+    material?: string;
+    craft?: string | null;
+    shaft?: string | null;
+    arrow?: string | null;
+    rarity?: number;
+    weaponDamage?: { min: number; max: number };
+  } | null | undefined
+): WeaponCombatProfile {
+  const itemId = item?.itemId || item?.id || 'tushou';
+  const materialId = item?.material || 'chaogang';
+  const craft = item?.craft;
+  const shaft = item?.shaft;
+  const arrow = item?.arrow;
+  const rarity = item?.rarity ?? 0;
+
+  const base = baseWeapons.find((w) => w.id === itemId);
+  const finalW = getWeaponFinal(itemId, materialId, craft, shaft, arrow);
+  if (item?.weaponDamage) {
+    finalW.dmg = Math.round((item.weaponDamage.min + item.weaponDamage.max) / 2);
+  }
+
+  const mat = materials.find((m) => m.id === materialId) || {
+    tier: 3,
+    id: 'chaogang',
+    name: '炒钢',
+    dmg_scale: 1.0,
+    durability_scale: 1.0,
+  };
+  const craftObj = crafts.find((c) => c.id === craft);
+  const shaftObj = shaftMaterials.find((s) => s.id === shaft);
+  const arrowObj = arrows.find((a) => a.id === arrow);
+
+  const wClass = finalW.class;
+  const className = WEAPON_CLASS_NAMES[wClass] || wClass;
+
+  const grip = finalW.grip === 'twohand' ? 'twohand' : 'onehand';
+  const gripName = grip === 'twohand' ? '双手持握' : '单手持握';
+
+  // 基础节奏画像（基于默认基础体质回体 5）
+  const baseRegen = 5;
+  const attackRoundRegen = Math.floor(baseRegen / 2);
+  const netStaminaOnAttack = attackRoundRegen - finalW.cost;
+
+  const rhythm: WeaponRhythmProfile = {
+    intervalRounds: finalW.interval,
+    chargingRounds: Math.max(0, finalW.interval - 1),
+    staminaCostPerAttack: finalW.cost,
+    idleRegenPerRound: baseRegen,
+    attackRoundRegen,
+    netStaminaOnAttack,
+    hasFirstStrike: !!finalW.first,
+  };
+
+  // 强类型特性解析（无 null 模糊，全部显式 boolean 标记）
+  const traits: WeaponTraitItem[] = [];
+
+  // 1. 连击 (blade 等)
+  if (finalW.combo > 0) {
+    const pct = Math.round(finalW.combo * 100);
+    traits.push({
+      code: 'COMBO',
+      name: '追击连斩',
+      description: `攻击命中且对手存活时，有 ${pct}% 概率触发同 actionId 的第二段连击伤害。`,
+      hasChancePercent: true,
+      chancePercent: pct,
+      hasDamageScale: true,
+      damageScale: 1.0,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: '攻击命中且自身未阵亡',
+    });
+  }
+
+  // 2. 招架反击 (sword 等)
+  if (finalW.parry > 0) {
+    const pct = Math.round(finalW.parry * 100);
+    const scale = finalW.parryDmgScale ?? 1.0;
+    traits.push({
+      code: 'PARRY_COUNTER',
+      name: '招架反击',
+      description: `防守方被攻击受到伤害后（若存活且未被震慑），有 ${pct}% 概率发动即时反击（伤害系数 ${scale}x）。注意：反击不免除受击伤害。`,
+      hasChancePercent: true,
+      chancePercent: pct,
+      hasDamageScale: true,
+      damageScale: scale,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: '防守承受伤害后存活且自身未处于震慑状态',
+    });
+  }
+
+  // 3. 枪术击退 (spear 等)
+  if (finalW.repel > 0) {
+    const pct = Math.round(finalW.repel * 100);
+    traits.push({
+      code: 'REPEL',
+      name: '枪劲击退',
+      description: `命中时有 ${pct}% 概率令非长刀目标下一回合出手受挫落空。`,
+      hasChancePercent: true,
+      chancePercent: pct,
+      hasDamageScale: false,
+      damageScale: 0,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: '攻击命中目标且对手无击退免疫',
+    });
+  }
+
+  // 4. 重击震慑 (blunt 等)
+  if (finalW.stun > 0) {
+    const pct = Math.round(finalW.stun * 100);
+    traits.push({
+      code: 'STUN',
+      name: '重击震慑',
+      description: `命中时有 ${pct}% 概率使目标震慑跳过下一行动回合，并强制进行调息。`,
+      hasChancePercent: true,
+      chancePercent: pct,
+      hasDamageScale: false,
+      damageScale: 0,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: true,
+      stunRounds: 1,
+      conditionDescription: '攻击命中目标',
+    });
+  }
+
+  // 5. 破甲穿透 (穿甲/钝器震伤特性)
+  if (wClass === 'blunt') {
+    traits.push({
+      code: 'BLUNT_SHOCK',
+      name: '钝击透甲',
+      description: '钝器无法穿甲时造成 8 点固定透甲震伤；被盾牌格挡时依然造成 5 点固定余震伤害。',
+      hasChancePercent: false,
+      chancePercent: 0,
+      hasDamageScale: false,
+      damageScale: 0,
+      hasFixedDamage: true,
+      fixedDamage: 8,
+      hasArmorPierceBonus: true,
+      armorPierceBonus: 2,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: '未破甲或被盾牌格挡时常驻生效',
+    });
+  }
+
+  // 6. 锏忽略减伤
+  if (finalW.ignoreReduce > 0) {
+    traits.push({
+      code: 'IGNORE_REDUCE',
+      name: '破甲压制',
+      description: `攻击穿透计算时，强制忽略目标护甲 ${finalW.ignoreReduce} 点减伤值。`,
+      hasChancePercent: false,
+      chancePercent: 0,
+      hasDamageScale: false,
+      damageScale: 0,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: '完全贯穿护甲结算时',
+    });
+  }
+
+  // 7. 克制长兵 (双手长刀)
+  if (finalW.vsKind) {
+    traits.push({
+      code: 'VS_KIND_ADVANTAGE',
+      name: `克制${WEAPON_CLASS_NAMES[finalW.vsKind] || finalW.vsKind}`,
+      description: `面对手持${WEAPON_CLASS_NAMES[finalW.vsKind] || finalW.vsKind}的目标时，攻击基础命中率提升 +${finalW.vsHit ?? 0}%，且免疫长枪击退效果。`,
+      hasChancePercent: false,
+      chancePercent: 0,
+      hasDamageScale: false,
+      damageScale: 0,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: true,
+      hitBonus: finalW.vsHit ?? 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: `目标装备武器为 ${WEAPON_CLASS_NAMES[finalW.vsKind] || finalW.vsKind}`,
+    });
+  }
+
+  // 8. 弓箭先攻与箭矢
+  if (finalW.first) {
+    traits.push({
+      code: 'FIRST_STRIKE',
+      name: '远程先发',
+      description: '战斗首回合抢先出手。远程射击受纸甲等特定防具克制。',
+      hasChancePercent: false,
+      chancePercent: 0,
+      hasDamageScale: false,
+      damageScale: 0,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: '战斗第 1 回合',
+    });
+  }
+
+  // 9. 名器专属加成
+  if (finalW.bonusA !== undefined && finalW.bonusScale !== undefined) {
+    traits.push({
+      code: 'LEGENDARY_SLAY_ARMOR',
+      name: '名刃破重甲',
+      description: `面对护甲防护级 A >= ${finalW.bonusA} 的敌人时，攻击伤害基础值提升 ${Math.round((finalW.bonusScale - 1) * 100)}%。`,
+      hasChancePercent: false,
+      chancePercent: 0,
+      hasDamageScale: true,
+      damageScale: finalW.bonusScale,
+      hasFixedDamage: false,
+      fixedDamage: 0,
+      hasArmorPierceBonus: false,
+      armorPierceBonus: 0,
+      hasHitBonus: false,
+      hitBonus: 0,
+      hasStunRounds: false,
+      stunRounds: 0,
+      conditionDescription: `目标防护等级 A >= ${finalW.bonusA}`,
+    });
+  }
+
+  return {
+    profileVersion: 1,
+    class: wClass,
+    className,
+    grip,
+    gripName,
+    materialTier: mat.tier,
+    materialName: mat.name,
+    rarity,
+    rarityName: RARITY_NAMES[rarity] || '普通',
+    craftName: craftObj?.name || '无',
+    shaftName: shaftObj?.name || '无',
+    arrowName: arrowObj?.name || '无',
+    baseDamage: finalW.dmg,
+    penetration: finalW.p,
+    baseHitPercent: finalW.hit,
+    dodgeSelfModifier: base?.id === 'tushou' ? 15 : 0,
+    rhythm,
+    traits,
+  };
+}
+
+/** 动态为装备对象补全/同步最新的 iconId、汉字名称以及 combatProfile */
 export function enrichEquipmentItem<
-  T extends { slot?: string; itemId?: string; id?: string; iconId?: string; name?: string; craft?: string | null } | null | undefined
+  T extends {
+    slot?: string;
+    itemId?: string;
+    id?: string;
+    iconId?: string;
+    name?: string;
+    craft?: string | null;
+    combatProfile?: WeaponCombatProfile;
+    subType?: 'weapon' | 'shield' | 'none';
+  } | null | undefined
 >(item: T): T {
   if (!item) return item;
   const latestIcon = resolveItemIconId(item);
   if (latestIcon) {
     item.iconId = latestIcon;
   }
-  normalizeItemName(item);
+  normalizeItemName(item as any);
+
+  // 若为武器槽位或副手武器，注入/更新 combatProfile
+  const isWeapon = item.slot === 'weapon' || (item.slot === 'offHand' && item.subType === 'weapon') || baseWeapons.some((w) => w.id === item.itemId);
+  if (isWeapon) {
+    item.combatProfile = buildWeaponCombatProfile(item as any);
+  }
+
   return item;
 }
 
-/** 遍历并为整个 GameState 的装备栏、背包及黑市物品同步最新 iconId 与汉字名称 */
+/** 遍历并为整个 GameState 的装备栏、背包及黑市物品同步最新 iconId 与汉字名称与画像 */
 export function normalizeGameStateEquipment(state: GameState): GameState {
   if (state.equipment?.equipped) {
     if (state.equipment.equipped.weapon) enrichEquipmentItem(state.equipment.equipped.weapon);

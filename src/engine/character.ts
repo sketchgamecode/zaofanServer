@@ -1,7 +1,7 @@
 import { ATTRIBUTE_KEYS, getAttributeUpgradeCost } from '../config/characterRules.js';
 import type { ActionSuccessResponse } from '../types/action.js';
 import type { ActionContext } from './actionContext.js';
-import { buildCombatPreview } from './characterCombat.js';
+import { buildCombatPreview, buildCharacterCombatSummary } from './characterCombat.js';
 import type { CharacterInfoView } from '../types/gameState.js';
 import { getTotalAttributes } from './mathCore.js';
 
@@ -55,6 +55,7 @@ export function buildCharacterInfoView(state: ActionContext['state']): Character
       },
     },
     combatPreview: buildCombatPreview(state),
+    combatSummary: buildCharacterCombatSummary(state),
     equipment: {
       equipped: { ...state.equipment.equipped },
     },

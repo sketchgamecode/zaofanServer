@@ -69,6 +69,113 @@ export type EquipmentItem = {
   shaft?: string | null;
   upgrade?: string | null;
   arrow?: string | null;
+  combatProfile?: WeaponCombatProfile;
+};
+
+// -------------------------------------------------------------
+// Phase 1: 战斗外装备详情与角色面板数据契约 (Unity JsonUtility 强兼容)
+// -------------------------------------------------------------
+
+export type WeaponRhythmProfile = {
+  intervalRounds: number;
+  chargingRounds: number;
+  staminaCostPerAttack: number;
+  idleRegenPerRound: number;
+  attackRoundRegen: number;
+  netStaminaOnAttack: number;
+  hasFirstStrike: boolean;
+};
+
+export type WeaponTraitItem = {
+  code: string;
+  name: string;
+  description: string;
+  hasChancePercent: boolean;
+  chancePercent: number;
+  hasDamageScale: boolean;
+  damageScale: number;
+  hasFixedDamage: boolean;
+  fixedDamage: number;
+  hasArmorPierceBonus: boolean;
+  armorPierceBonus: number;
+  hasHitBonus: boolean;
+  hitBonus: number;
+  hasStunRounds: boolean;
+  stunRounds: number;
+  conditionDescription: string;
+};
+
+export type WeaponCombatProfile = {
+  profileVersion: number;
+  class: 'blade' | 'sword' | 'spear' | 'blunt' | 'bow' | 'fist';
+  className: string;
+  grip: 'onehand' | 'twohand' | 'dual' | 'none';
+  gripName: string;
+  materialTier: number;
+  materialName: string;
+  rarity: number;
+  rarityName: string;
+  craftName: string;
+  shaftName: string;
+  arrowName: string;
+  baseDamage: number;
+  penetration: number;
+  baseHitPercent: number;
+  dodgeSelfModifier: number;
+  rhythm: WeaponRhythmProfile;
+  traits: WeaponTraitItem[];
+};
+
+export type CharacterCombatRuleConfig = {
+  exposedTriggerAtOrBelow: number;
+  staminaAfterExposedReset: number;
+  attackRoundRegenRule: string;
+  offhandDamageScalePercent: number;
+};
+
+export type ActiveSetTraitItem = {
+  sourceSlot: 'weapon' | 'offHand' | 'body';
+  sourceItemId: string;
+  sourceInstanceId: string;
+  sourceName: string;
+  code: string;
+  name: string;
+  description: string;
+  hasChancePercent: boolean;
+  chancePercent: number;
+  hasDamageScale: boolean;
+  damageScale: number;
+  hasFixedDamage: boolean;
+  fixedDamage: number;
+};
+
+export type CharacterCombatSummary = {
+  summaryVersion: number;
+  hpMax: number;
+  staminaMax: number;
+  staminaRegenIdle: number;
+  staminaRegenAttackRound: number;
+  armorLevel: number;
+  armorReduce: number;
+  dodgeRatePercent: number;
+  blockRatePercent: number;
+  blockReason: string;
+  isDualWielding: boolean;
+  mainWeaponDamage: number;
+  mainWeaponPenetration: number;
+  mainWeaponHitRatePercent: number;
+  mainWeaponInterval: number;
+  mainWeaponStaminaCost: number;
+  hasOffhandWeapon: boolean;
+  offhandWeaponDamage: number;
+  offhandWeaponPenetration: number;
+  offhandWeaponHitRatePercent: number;
+  offhandWeaponStaminaCost: number;
+  hasShield: boolean;
+  shieldBlockRatePercent: number;
+  shieldBlockCostMod: number;
+  activeSetTraits: ActiveSetTraitItem[];
+  rules: CharacterCombatRuleConfig;
 };
 
 export type MetaState = {
@@ -143,6 +250,7 @@ export type CharacterInfoView = {
     upgradeCosts: UpgradeCostsView;
   };
   combatPreview: CombatPreviewView;
+  combatSummary?: CharacterCombatSummary;
   equipment: {
     equipped: EquipmentState['equipped'];
   };

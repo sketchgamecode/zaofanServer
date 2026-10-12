@@ -13,6 +13,7 @@ import {
   getWeaponFinal,
   getArmorFinal,
   getShieldFinal,
+  buildWeaponCombatProfile,
 } from '../lib/equipmentData.js';
 
 // --- 常量与映射 ---
@@ -280,6 +281,19 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
     resolveItemIconId({ slot, itemId, id }) ||
     `item_${slot}_${String(rng.int(1, 5)).padStart(2, '0')}`;
 
+    const isWeapon = slot === 'weapon' || (slot === 'offHand' && subType === 'weapon') || baseWeapons.some((w) => w.id === itemId);
+    const combatProfile = isWeapon
+      ? buildWeaponCombatProfile({
+          itemId,
+          material,
+          craft,
+          shaft,
+          arrow,
+          rarity,
+          weaponDamage: weaponDamageVal,
+        })
+      : undefined;
+
     return {
       id,
       name,
@@ -288,19 +302,20 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
       rarity,
       iconId: customIconId,
       subType,
-    armor: armorVal,
-    weaponDamage: weaponDamageVal,
-    price,
-    sellPrice,
-    bonusAttributes: {},
-    itemId,
-    material,
-    craft,
-    shaft,
-    upgrade,
-    arrow,
-  };
-}
+      armor: armorVal,
+      weaponDamage: weaponDamageVal,
+      price,
+      sellPrice,
+      bonusAttributes: {},
+      itemId,
+      material,
+      craft,
+      shaft,
+      upgrade,
+      arrow,
+      combatProfile,
+    };
+  }
 
 export type ShopBatchInput = {
   playerLevel: number;
