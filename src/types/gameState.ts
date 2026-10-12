@@ -80,9 +80,6 @@ export type WeaponRhythmProfile = {
   intervalRounds: number;
   chargingRounds: number;
   staminaCostPerAttack: number;
-  idleRegenPerRound: number;
-  attackRoundRegen: number;
-  netStaminaOnAttack: number;
   hasFirstStrike: boolean;
 };
 
@@ -96,8 +93,8 @@ export type WeaponTraitItem = {
   damageScale: number;
   hasFixedDamage: boolean;
   fixedDamage: number;
-  hasArmorPierceBonus: boolean;
-  armorPierceBonus: number;
+  hasIgnoreArmorReduce: boolean;
+  ignoreArmorReduce: number;
   hasHitBonus: boolean;
   hitBonus: number;
   hasStunRounds: boolean;
@@ -166,11 +163,13 @@ export type CharacterCombatSummary = {
   mainWeaponHitRatePercent: number;
   mainWeaponInterval: number;
   mainWeaponStaminaCost: number;
+  netStaminaMainAttack: number;
   hasOffhandWeapon: boolean;
   offhandWeaponDamage: number;
   offhandWeaponPenetration: number;
   offhandWeaponHitRatePercent: number;
   offhandWeaponStaminaCost: number;
+  netStaminaDualAttack: number;
   hasShield: boolean;
   shieldBlockRatePercent: number;
   shieldBlockCostMod: number;

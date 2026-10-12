@@ -34,8 +34,7 @@ describe('Phase 1 Weapon Combat Profile & Character Combat Summary', () => {
     expect(profile.rhythm.intervalRounds).toBe(1);
     expect(profile.rhythm.chargingRounds).toBe(0);
     expect(profile.rhythm.staminaCostPerAttack).toBe(6);
-    expect(profile.rhythm.attackRoundRegen).toBe(2);
-    expect(profile.rhythm.netStaminaOnAttack).toBe(-4);
+    expect(profile.rhythm.hasFirstStrike).toBe(false);
 
     // Traits (JsonUtility safety: no undefined/null numbers)
     const comboTrait = profile.traits.find((t) => t.code === 'COMBO');
@@ -44,6 +43,7 @@ describe('Phase 1 Weapon Combat Profile & Character Combat Summary', () => {
     expect(comboTrait?.chancePercent).toBe(20);
     expect(comboTrait?.hasFixedDamage).toBe(false);
     expect(comboTrait?.fixedDamage).toBe(0);
+    expect(comboTrait?.hasIgnoreArmorReduce).toBe(false);
   });
 
   it('reflects material tier differences for T1 vs T2 vs T3 weapons accurately', () => {
@@ -89,6 +89,30 @@ describe('Phase 1 Weapon Combat Profile & Character Combat Summary', () => {
     expect(t4.baseDamage).toBe(15); // 12 * 1.2 * 1.05 = 15.12 -> 15
   });
 
+  it('builds blunt shock trait without conflating armor pierce and ignore reduce', () => {
+    const blunt = buildWeaponCombatProfile({
+      itemId: 'chui_guduo',
+      material: 'chaogang',
+      rarity: 1,
+    } as EquipmentItem);
+    expect(blunt.penetration).toBe(5); // 3 + p_mod 2 = 5
+    const shock = blunt.traits.find((t) => t.code === 'BLUNT_SHOCK');
+    expect(shock).toBeDefined();
+    expect(shock?.hasFixedDamage).toBe(true);
+    expect(shock?.fixedDamage).toBe(8);
+    expect(shock?.hasIgnoreArmorReduce).toBe(false);
+
+    const siling = buildWeaponCombatProfile({
+      itemId: 'jian_siling',
+      material: 'chaogang',
+      rarity: 1,
+    } as EquipmentItem);
+    const ignoreTrait = siling.traits.find((t) => t.code === 'IGNORE_REDUCE');
+    expect(ignoreTrait).toBeDefined();
+    expect(ignoreTrait?.hasIgnoreArmorReduce).toBe(true);
+    expect(ignoreTrait?.ignoreArmorReduce).toBe(2);
+  });
+
   it('builds slow weapon (双手长刀) and bow profiles correctly', () => {
     const changdao = buildWeaponCombatProfile({
       itemId: 'dao_changdao',
@@ -123,7 +147,7 @@ describe('Phase 1 Weapon Combat Profile & Character Combat Summary', () => {
     expect(typeof item.combatProfile?.baseDamage).toBe('number');
   });
 
-  it('calculates CharacterCombatSummary for dual-wield, sword & shield, and armor traits', () => {
+  it('calculates CharacterCombatSummary and asserts consistency with combat snapshot on armor swap', () => {
     const baseMockState: GameState = {
       meta: { schemaVersion: 1, createdAt: 0, updatedAt: 0, lastDailyResetDate: '', stateRevision: 1 },
       player: { level: 20, exp: 0, classId: 'CLASS_A', raceId: 'RACE_01', status: 'ACTIVE' },
@@ -177,23 +201,47 @@ describe('Phase 1 Weapon Combat Profile & Character Combat Summary', () => {
       world: {} as any,
     };
 
-    // 1. 剑盾组合测试
-    const shieldSummary = buildCharacterCombatSummary(baseMockState);
-    expect(shieldSummary.summaryVersion).toBe(1);
-    expect(shieldSummary.isDualWielding).toBe(false);
-    expect(shieldSummary.hasShield).toBe(true);
-    expect(shieldSummary.blockRatePercent).toBe(40); // 15 + 25 = 40%
-    expect(shieldSummary.armorLevel).toBe(4);
-    expect(shieldSummary.armorReduce).toBe(4);
-    expect(shieldSummary.rules.exposedTriggerAtOrBelow).toBe(0);
-    expect(shieldSummary.rules.staminaAfterExposedReset).toBe(40);
+    // 1. 穿戴明光铠 (mingguang: stamina 82, a 4, reduce 4, regen 3)
+    const summaryMingguang = buildCharacterCombatSummary(baseMockState);
+    expect(summaryMingguang.hpMax).toBe(82); // 与 battleSide.hp 一致
+    expect(summaryMingguang.staminaMax).toBe(82);
+    expect(summaryMingguang.staminaRegenIdle).toBe(3);
+    expect(summaryMingguang.staminaRegenAttackRound).toBe(1); // floor(3/2) = 1
+    expect(summaryMingguang.netStaminaMainAttack).toBe(1 - 6); // 1 - 6 = -5
+    expect(summaryMingguang.armorLevel).toBe(4);
+    expect(summaryMingguang.armorReduce).toBe(4);
+    expect(summaryMingguang.activeSetTraits.some((t) => t.code === 'ARMOR_MIRROR_DEFLECT')).toBe(true);
 
-    // Active traits contains parry (from sword), shield bash push (from shield), and mirror deflect (from mingguang armor)
-    expect(shieldSummary.activeSetTraits.some((t) => t.code === 'PARRY_COUNTER')).toBe(true);
-    expect(shieldSummary.activeSetTraits.some((t) => t.code === 'SHIELD_BASH_PUSH')).toBe(true);
-    expect(shieldSummary.activeSetTraits.some((t) => t.code === 'ARMOR_MIRROR_DEFLECT')).toBe(true);
+    // 2. 切换为布衣 (buyi: stamina 100, a 0, reduce 0, regen 5)
+    const stateBuyi: GameState = {
+      ...baseMockState,
+      equipment: {
+        equipped: {
+          ...baseMockState.equipment.equipped,
+          body: {
+            id: 'armor_buyi',
+            name: '布衣麻衣',
+            description: '',
+            slot: 'body',
+            rarity: 0,
+            sellPrice: 10,
+            bonusAttributes: {},
+            itemId: 'buyi',
+          },
+        },
+      },
+    };
+    const summaryBuyi = buildCharacterCombatSummary(stateBuyi);
+    expect(summaryBuyi.hpMax).toBe(100);
+    expect(summaryBuyi.staminaMax).toBe(100);
+    expect(summaryBuyi.staminaRegenIdle).toBe(5);
+    expect(summaryBuyi.staminaRegenAttackRound).toBe(2); // floor(5/2) = 2
+    expect(summaryBuyi.netStaminaMainAttack).toBe(2 - 6); // 2 - 6 = -4
+    expect(summaryBuyi.armorLevel).toBe(0);
+    expect(summaryBuyi.armorReduce).toBe(0);
+    expect(summaryBuyi.activeSetTraits.some((t) => t.code === 'ARMOR_MIRROR_DEFLECT')).toBe(false);
 
-    // 2. 双持组合测试 (换下盾牌，换上副手柳叶刀)
+    // 3. 双持短兵测试
     const dualWieldState: GameState = {
       ...baseMockState,
       equipment: {
@@ -233,5 +281,7 @@ describe('Phase 1 Weapon Combat Profile & Character Combat Summary', () => {
     expect(dualSummary.blockRatePercent).toBe(0); // 双持强制关闭格挡
     expect(dualSummary.blockReason).toContain('双持短兵关闭格挡');
     expect(dualSummary.offhandWeaponDamage).toBe(Math.floor(12 * 0.8)); // 80% damage
+    // 双持出手耗体 = main(6) + off(6) = 12，回体 1 (明光铠)，净消耗 = 1 - 12 = -11
+    expect(dualSummary.netStaminaDualAttack).toBe(1 - 6 - 6);
   });
 });

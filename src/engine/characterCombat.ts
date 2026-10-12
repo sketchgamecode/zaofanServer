@@ -223,7 +223,7 @@ export function buildCharacterCombatSummary(state: GameState): CharacterCombatSu
       sourceName: offHandItem.name,
       code: 'SHIELD_BASH_PUSH',
       name: '盾击推撞',
-      description: '格挡成功时有 30% 概率触发盾击推撞，使敌方失衡（下一回合命中率降低 20%）。',
+      description: '格挡成功后有 30% 概率使对手推撞失衡，其下一次攻击受到 20 个百分点的命中减益，生效后解除。',
       hasChancePercent: true,
       chancePercent: 30,
       hasDamageScale: false,
@@ -287,12 +287,21 @@ export function buildCharacterCombatSummary(state: GameState): CharacterCombatSu
     }
   }
 
+  // 6. 生命与体力收支 (与战斗快照 buildPlayerBattleSide / normalizeFighter 保持完全一致)
+  const battleSide = buildPlayerBattleSide(state);
+  const hpMax = battleSide.hp;
+  const attackRoundRegen = Math.floor(armorFinal.regen / 2);
+  const netStaminaMainAttack = attackRoundRegen - weaponFinal.cost;
+  const netStaminaDualAttack = isDualWielding && offhandWeapon
+    ? attackRoundRegen - weaponFinal.cost - offhandWeapon.cost
+    : netStaminaMainAttack;
+
   return {
     summaryVersion: 1,
-    hpMax: 100,
+    hpMax,
     staminaMax: armorFinal.stamina,
     staminaRegenIdle: armorFinal.regen,
-    staminaRegenAttackRound: Math.floor(armorFinal.regen / 2),
+    staminaRegenAttackRound: attackRoundRegen,
     armorLevel: armorFinal.a,
     armorReduce: armorFinal.reduce,
     dodgeRatePercent,
@@ -304,11 +313,13 @@ export function buildCharacterCombatSummary(state: GameState): CharacterCombatSu
     mainWeaponHitRatePercent: weaponFinal.hit,
     mainWeaponInterval: weaponFinal.interval,
     mainWeaponStaminaCost: weaponFinal.cost,
+    netStaminaMainAttack,
     hasOffhandWeapon: !!offhandWeapon,
     offhandWeaponDamage: offhandWeapon ? Math.floor(offhandWeapon.dmg * 0.8) : 0,
     offhandWeaponPenetration: offhandWeapon ? offhandWeapon.p : 0,
     offhandWeaponHitRatePercent: offhandWeapon ? offhandWeapon.hit : 0,
     offhandWeaponStaminaCost: offhandWeapon ? offhandWeapon.cost : 0,
+    netStaminaDualAttack,
     hasShield: !!shieldFinal,
     shieldBlockRatePercent: shieldFinal ? Math.round(shieldFinal.blockMod * 100) : 0,
     shieldBlockCostMod: shieldFinal ? shieldFinal.blockCostMod : 0,
