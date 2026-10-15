@@ -732,6 +732,80 @@ const WEAPON_CLASS_NAMES: Record<string, string> = {
   fist: '拳/徒手',
 };
 
+/** 战技文案默认模板。占位符 {pct} {scale} {n} {hit} {kind} {a} 由服务端按武器数值代入；可在 equipment_data.json 的 trait_texts 中按 code 覆盖。 */
+export const TRAIT_TEXT_DEFAULTS: Record<string, { label: string; placeholders: string; name: string; description: string; conditionDescription: string }> = {
+  COMBO: {
+    label: '连击（武器字段 combo）', placeholders: '{pct}=触发概率%',
+    name: '追击连斩',
+    description: '攻击命中且对手存活未被格挡时，有 {pct}% 概率立即追加一次攻击；追加攻击独立判定命中，且不能再次触发连击。',
+    conditionDescription: '攻击命中对手且未被格挡、对手未阵亡',
+  },
+  PARRY_COUNTER: {
+    label: '招架反击（武器字段 parry）', placeholders: '{pct}=触发概率% {scale}=反击伤害系数',
+    name: '招架反击',
+    description: '防守方被攻击受到伤害后（若存活且未被震慑），有 {pct}% 概率发动即时反击（伤害系数 {scale}x）。注意：反击不免除受击伤害。',
+    conditionDescription: '防守承受伤害后存活且自身未处于震慑状态',
+  },
+  REPEL: {
+    label: '击退（武器字段 repel）', placeholders: '{pct}=触发概率%',
+    name: '枪劲击退',
+    description: '命中时有 {pct}% 概率令非长刀目标下一回合出手受挫落空。',
+    conditionDescription: '攻击命中目标且对手无击退免疫',
+  },
+  STUN: {
+    label: '眩晕/震慑（武器字段 stun）', placeholders: '{pct}=触发概率%',
+    name: '重击震慑',
+    description: '命中时有 {pct}% 概率使目标震慑跳过下一行动回合，并强制进行调息。',
+    conditionDescription: '攻击命中目标',
+  },
+  BLUNT_SHOCK: {
+    label: '钝击透甲（钝器自带）', placeholders: '无',
+    name: '钝击透甲',
+    description: '钝器无法穿透护甲时造成 8 点固定透甲震伤；被盾牌格挡时依然造成 5 点固定余震伤害。注意：钝器自带的破甲级加成已直接计入武器破甲值中。',
+    conditionDescription: '未破甲或被盾牌格挡时常驻生效',
+  },
+  IGNORE_REDUCE: {
+    label: '破甲压制（武器字段 ignore_reduce）', placeholders: '{n}=忽略的减伤点数',
+    name: '破甲压制',
+    description: '攻击穿透护甲计算时，强制忽略目标护甲 {n} 点减伤值。',
+    conditionDescription: '完全贯穿护甲结算时',
+  },
+  VS_KIND_ADVANTAGE: {
+    label: '克制某类兵器（武器字段 vs_kind）', placeholders: '{kind}=被克制兵器名 {hit}=命中加成%',
+    name: '克制{kind}',
+    description: '面对手持{kind}的目标时，攻击基础命中率提升 +{hit}%，且免疫长枪击退效果。',
+    conditionDescription: '目标装备武器为 {kind}',
+  },
+  FIRST_STRIKE: {
+    label: '远程先发（武器字段 first）', placeholders: '无',
+    name: '远程先发',
+    description: '出手就绪时具有行动优先权（仍受自身状态及双方优先级影响）。远程射击受纸甲等特定防具克制。',
+    conditionDescription: '攻击准备就绪出手判定时',
+  },
+  LEGENDARY_SLAY_ARMOR: {
+    label: '名器破重甲（武器字段 bonus_a / bonus_scale）', placeholders: '{a}=护甲等级门槛 {pct}=伤害提升%',
+    name: '名刃破重甲',
+    description: '面对护甲防护级 A >= {a} 的敌人时，攻击伤害基础值提升 {pct}%。',
+    conditionDescription: '目标防护等级 A >= {a}',
+  },
+};
+
+function fillTraitTemplate(tpl: string, vars: Record<string, string | number | undefined>): string {
+  return tpl.replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
+}
+
+/** 取战技文案：优先 equipment_data.json 的 trait_texts[code] 覆盖项，缺省用默认模板。 */
+export function traitTexts(code: string, vars: Record<string, string | number | undefined>): { name: string; description: string; conditionDescription: string } {
+  const d = TRAIT_TEXT_DEFAULTS[code];
+  const o = ((equipmentData as any).trait_texts?.[code] ?? {}) as { name?: string; description?: string; conditionDescription?: string };
+  const pick = (ov: string | undefined, def: string) => fillTraitTemplate(ov && ov.trim() ? ov.trim() : def, vars);
+  return {
+    name: pick(o.name, d.name),
+    description: pick(o.description, d.description),
+    conditionDescription: pick(o.conditionDescription, d.conditionDescription),
+  };
+}
+
 const RARITY_NAMES: Record<number, string> = {
   0: '凡品',
   1: '良品',
@@ -798,8 +872,7 @@ export function buildWeaponCombatProfile(
     const pct = Math.round(finalW.combo * 100);
     traits.push({
       code: 'COMBO',
-      name: '追击连斩',
-      description: `攻击命中且对手存活未被格挡时，有 ${pct}% 概率立即追加一次攻击；追加攻击独立判定命中，且不能再次触发连击。`,
+      ...traitTexts('COMBO', { pct }),
       hasChancePercent: true,
       chancePercent: pct,
       hasDamageScale: true,
@@ -812,7 +885,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: '攻击命中对手且未被格挡、对手未阵亡',
     });
   }
 
@@ -822,8 +894,7 @@ export function buildWeaponCombatProfile(
     const scale = finalW.parryDmgScale ?? 1.0;
     traits.push({
       code: 'PARRY_COUNTER',
-      name: '招架反击',
-      description: `防守方被攻击受到伤害后（若存活且未被震慑），有 ${pct}% 概率发动即时反击（伤害系数 ${scale}x）。注意：反击不免除受击伤害。`,
+      ...traitTexts('PARRY_COUNTER', { pct, scale }),
       hasChancePercent: true,
       chancePercent: pct,
       hasDamageScale: true,
@@ -836,7 +907,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: '防守承受伤害后存活且自身未处于震慑状态',
     });
   }
 
@@ -845,8 +915,7 @@ export function buildWeaponCombatProfile(
     const pct = Math.round(finalW.repel * 100);
     traits.push({
       code: 'REPEL',
-      name: '枪劲击退',
-      description: `命中时有 ${pct}% 概率令非长刀目标下一回合出手受挫落空。`,
+      ...traitTexts('REPEL', { pct }),
       hasChancePercent: true,
       chancePercent: pct,
       hasDamageScale: false,
@@ -859,7 +928,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: '攻击命中目标且对手无击退免疫',
     });
   }
 
@@ -868,8 +936,7 @@ export function buildWeaponCombatProfile(
     const pct = Math.round(finalW.stun * 100);
     traits.push({
       code: 'STUN',
-      name: '重击震慑',
-      description: `命中时有 ${pct}% 概率使目标震慑跳过下一行动回合，并强制进行调息。`,
+      ...traitTexts('STUN', { pct }),
       hasChancePercent: true,
       chancePercent: pct,
       hasDamageScale: false,
@@ -882,7 +949,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: true,
       stunRounds: 1,
-      conditionDescription: '攻击命中目标',
     });
   }
 
@@ -890,8 +956,7 @@ export function buildWeaponCombatProfile(
   if (wClass === 'blunt') {
     traits.push({
       code: 'BLUNT_SHOCK',
-      name: '钝击透甲',
-      description: '钝器无法穿透护甲时造成 8 点固定透甲震伤；被盾牌格挡时依然造成 5 点固定余震伤害。注意：钝器自带的破甲级加成已直接计入武器破甲值中。',
+      ...traitTexts('BLUNT_SHOCK', {}),
       hasChancePercent: false,
       chancePercent: 0,
       hasDamageScale: false,
@@ -904,7 +969,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: '未破甲或被盾牌格挡时常驻生效',
     });
   }
 
@@ -912,8 +976,7 @@ export function buildWeaponCombatProfile(
   if (finalW.ignoreReduce > 0) {
     traits.push({
       code: 'IGNORE_REDUCE',
-      name: '破甲压制',
-      description: `攻击穿透护甲计算时，强制忽略目标护甲 ${finalW.ignoreReduce} 点减伤值。`,
+      ...traitTexts('IGNORE_REDUCE', { n: finalW.ignoreReduce }),
       hasChancePercent: false,
       chancePercent: 0,
       hasDamageScale: false,
@@ -926,7 +989,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: '完全贯穿护甲结算时',
     });
   }
 
@@ -934,8 +996,7 @@ export function buildWeaponCombatProfile(
   if (finalW.vsKind) {
     traits.push({
       code: 'VS_KIND_ADVANTAGE',
-      name: `克制${WEAPON_CLASS_NAMES[finalW.vsKind] || finalW.vsKind}`,
-      description: `面对手持${WEAPON_CLASS_NAMES[finalW.vsKind] || finalW.vsKind}的目标时，攻击基础命中率提升 +${finalW.vsHit ?? 0}%，且免疫长枪击退效果。`,
+      ...traitTexts('VS_KIND_ADVANTAGE', { kind: WEAPON_CLASS_NAMES[finalW.vsKind!] || finalW.vsKind, hit: finalW.vsHit ?? 0 }),
       hasChancePercent: false,
       chancePercent: 0,
       hasDamageScale: false,
@@ -948,7 +1009,6 @@ export function buildWeaponCombatProfile(
       hitBonus: finalW.vsHit ?? 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: `目标装备武器为 ${WEAPON_CLASS_NAMES[finalW.vsKind] || finalW.vsKind}`,
     });
   }
 
@@ -956,8 +1016,7 @@ export function buildWeaponCombatProfile(
   if (finalW.first) {
     traits.push({
       code: 'FIRST_STRIKE',
-      name: '远程先发',
-      description: '出手就绪时具有行动优先权（仍受自身状态及双方优先级影响）。远程射击受纸甲等特定防具克制。',
+      ...traitTexts('FIRST_STRIKE', {}),
       hasChancePercent: false,
       chancePercent: 0,
       hasDamageScale: false,
@@ -970,7 +1029,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: '攻击准备就绪出手判定时',
     });
   }
 
@@ -978,8 +1036,7 @@ export function buildWeaponCombatProfile(
   if (finalW.bonusA !== undefined && finalW.bonusScale !== undefined) {
     traits.push({
       code: 'LEGENDARY_SLAY_ARMOR',
-      name: '名刃破重甲',
-      description: `面对护甲防护级 A >= ${finalW.bonusA} 的敌人时，攻击伤害基础值提升 ${Math.round((finalW.bonusScale - 1) * 100)}%。`,
+      ...traitTexts('LEGENDARY_SLAY_ARMOR', { a: finalW.bonusA, pct: Math.round(((finalW.bonusScale ?? 1) - 1) * 100) }),
       hasChancePercent: false,
       chancePercent: 0,
       hasDamageScale: true,
@@ -992,7 +1049,6 @@ export function buildWeaponCombatProfile(
       hitBonus: 0,
       hasStunRounds: false,
       stunRounds: 0,
-      conditionDescription: `目标防护等级 A >= ${finalW.bonusA}`,
     });
   }
 
