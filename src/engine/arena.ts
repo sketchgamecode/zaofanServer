@@ -73,8 +73,12 @@ function ensureArenaActive(state: GameState): void {
   state.arena.rank ??= null;
   state.arena.dailyXpWins ??= state.arena.dailyWins ?? 0;
   state.arena.maxDailyXpWins ??= 10;
-  state.arena.fightsToday ??= 0;
   state.arena.candidates ??= [];
+  if (state.arena.candidates.length) {
+    for (const c of state.arena.candidates) {
+      if (c.loadout) c.loadout.offHand = null;
+    }
+  }
   state.arena.candidateSetId ??= null;
 }
 
@@ -200,7 +204,7 @@ function candidateToSnapshot(candidate: ArenaOpponentPreview): CombatantSnapshot
     loadout: candidate.loadout
       ? {
           weapon: enrichEquipmentItem(candidate.loadout.weapon),
-          offHand: enrichEquipmentItem(candidate.loadout.offHand),
+          offHand: null,
           body: enrichEquipmentItem(candidate.loadout.body),
           arrow: candidate.loadout.arrow,
         }

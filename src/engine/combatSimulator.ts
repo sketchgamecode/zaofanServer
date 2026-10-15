@@ -93,14 +93,12 @@ export function getFallbackLoadout(classId: PlayerClassId, level: number): Comba
     armorId = 'zhajia';
   } else if (classId === 'CLASS_B') {
     weaponId = 'jian_danshou';
-    offHandId = 'tengpai';
     armorId = 'pijia';
   } else if (classId === 'CLASS_C') {
     weaponId = 'jian_danshou';
     armorId = 'zhijia';
   } else if (classId === 'CLASS_D') {
     weaponId = 'dao_liuye';
-    offHandId = 'dao_liuye';
     armorId = 'pijia';
   } else if (classId === 'CLASS_E') {
     weaponId = 'chui_guduo';
@@ -698,7 +696,7 @@ export function simulateBattleV2(input: {
           sourceSlot: dfd.shield ? 'offHand' : undefined,
           sourceItemId: defenderLoadout.offHand?.itemId,
           sourceItemInstanceId: defenderLoadout.offHand?.id,
-          sourceName: defenderLoadout.offHand?.name || '格挡',
+          sourceName: dfd.shield ? (defenderLoadout.offHand?.name || '盾牌格挡') : '格挡',
           params: { blockRatePercent: Math.round(dfd.block * 100) },
         },
       ];
@@ -758,8 +756,8 @@ export function simulateBattleV2(input: {
         });
       }
 
-      // 盾牌推撞判定
-      if (rng.next() < 0.3) {
+      // 盾牌推撞判定 (仅当守方真正装备了盾牌时触发)
+      if (dfd.shield && rng.next() < 0.3) {
         att.hitDebuff = 20;
         triggers.push('push');
 
@@ -812,8 +810,8 @@ export function simulateBattleV2(input: {
             {
               code: 'STATUS_PUSH_TRIGGERED',
               sourceSide: oppSide,
-              sourceSlot: dfd.shield ? 'offHand' : undefined,
-              sourceName: defenderLoadout.offHand?.name || '盾击',
+              sourceSlot: 'offHand',
+              sourceName: defenderLoadout.offHand?.name || '盾牌',
             },
           ],
         });
