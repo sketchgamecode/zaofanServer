@@ -10,17 +10,17 @@ describe('Class Config Hot Reload and Attributes Verification', () => {
 
     const a = classConfigs.find((c) => c.id === 'CLASS_A');
     expect(a).toBeDefined();
-    expect(a?.name).toBe('猛将');
+    expect(a?.name).toBe('中原人');
     expect(a?.mainStat).toBe('strength');
-    expect(a?.mainStatName).toBe('力量');
+    expect(a?.mainStatName).toBe('膂力');
     expect(a?.hpMultiplier).toBe(5);
     expect(a?.blockChanceBp).toBe(2500);
     expect(a?.allowedWeaponClasses).toContain('spear');
   });
 
   it('CLASS_CONFIG dynamic proxy reflects class configuration correctly', () => {
-    expect(CLASS_CONFIG.CLASS_A.name).toBe('猛将');
-    expect(CLASS_CONFIG.CLASS_B.name).toBe('游侠');
+    expect(CLASS_CONFIG.CLASS_A.name).toBe('中原人');
+    expect(CLASS_CONFIG.CLASS_B.name).toBe('北狄人');
     expect(CLASS_CONFIG.CLASS_B.dodgeChanceBp).toBe(5000);
     expect(CLASS_CONFIG.CLASS_C.hpMultiplier).toBe(2);
 
@@ -78,7 +78,7 @@ describe('Class Config Hot Reload and Attributes Verification', () => {
     } finally {
       // 恢复原配置
       saveEquipmentData(fullOriginalData);
-      expect(CLASS_CONFIG.CLASS_A.name).toBe('猛将');
+      expect(CLASS_CONFIG.CLASS_A.name).toBe('中原人');
       expect(CLASS_CONFIG.CLASS_A.hpMultiplier).toBe(5);
     }
   });
