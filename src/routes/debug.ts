@@ -710,6 +710,36 @@ router.post('/wipe-all-saves', async (_req: Request, res: Response): Promise<voi
 });
 
 // ==========================================
+// ==========================================
+// API: 职业流派配置数据读取与保存
+// ==========================================
+router.get('/config/classes', (_req: Request, res: Response): void => {
+  res.json({
+    ok: true,
+    data: classConfigs,
+  });
+});
+
+router.post('/config/classes', (req: Request, res: Response): void => {
+  try {
+    const { classes } = req.body;
+    if (!Array.isArray(classes)) {
+      res.status(400).json({ ok: false, error: '无效的职业配置列表' });
+      return;
+    }
+    const currentData = { ...equipmentData, classes };
+    saveEquipmentData(currentData);
+    res.json({
+      ok: true,
+      message: '职业流派配置已保存并实时热重载生效！',
+      data: classConfigs,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '保存职业配置失败' });
+  }
+});
+
+// ==========================================
 // API: 装备配置数据读取与保存
 // ==========================================
 router.get('/config/equipment', (_req: Request, res: Response): void => {

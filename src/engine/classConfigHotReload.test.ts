@@ -82,4 +82,25 @@ describe('Class Config Hot Reload and Attributes Verification', () => {
       expect(CLASS_CONFIG.CLASS_A.hpMultiplier).toBe(5);
     }
   });
+
+  it('debug router provides GET /config/classes and POST /config/classes endpoints', async () => {
+    process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://mock.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'mock-key';
+
+    const { default: debugRouter } = await import('../routes/debug.js');
+    expect(debugRouter).toBeDefined();
+
+    const routes = (debugRouter as any).stack
+      .filter((layer: any) => layer.route)
+      .map((layer: any) => ({
+        path: layer.route.path,
+        methods: Object.keys(layer.route.methods),
+      }));
+
+    const getClassesRoute = routes.find((r: any) => r.path === '/config/classes' && r.methods.includes('get'));
+    const postClassesRoute = routes.find((r: any) => r.path === '/config/classes' && r.methods.includes('post'));
+
+    expect(getClassesRoute).toBeDefined();
+    expect(postClassesRoute).toBeDefined();
+  });
 });
