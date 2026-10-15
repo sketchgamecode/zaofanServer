@@ -16,6 +16,8 @@ import {
   buildWeaponCombatProfile,
 } from '../lib/equipmentData.js';
 
+import { CLASS_CONFIG } from './combatConfig.js';
+
 // --- 常量与映射 ---
 
 const QUALITY_MULTIPLIER: Record<ItemRarity, number> = {
@@ -26,13 +28,12 @@ const QUALITY_MULTIPLIER: Record<ItemRarity, number> = {
   4: 3.00,  // 名 (名器)
 };
 
-const CLASS_WEAPON_CLASSES: Record<PlayerClassId, ('blade' | 'sword' | 'spear' | 'blunt' | 'bow' | 'fist')[]> = {
-  CLASS_A: ['blade', 'spear'],      // 猛将
-  CLASS_B: ['sword'],               // 游侠
-  CLASS_C: ['sword'],               // 谋士 (配剑)
-  CLASS_D: ['blade'],               // 杀手 (双持刀)
-  CLASS_E: ['blunt'],               // 绿林好汉 (钝器)
-};
+export const CLASS_WEAPON_CLASSES: Record<PlayerClassId, ('blade' | 'sword' | 'spear' | 'blunt' | 'bow' | 'fist')[]> = new Proxy({} as any, {
+  get(_target, prop: string) {
+    const cfg = CLASS_CONFIG[prop as PlayerClassId];
+    return cfg?.allowedWeaponClasses || ['blade', 'sword', 'spear', 'blunt', 'bow'];
+  },
+});
 
 function defaultRng(): SeededRandom {
   return {

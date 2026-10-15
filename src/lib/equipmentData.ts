@@ -131,6 +131,20 @@ export interface HonorTitleTier {
   title: string;
 }
 
+export interface ClassConfigItem {
+  id: 'CLASS_A' | 'CLASS_B' | 'CLASS_C' | 'CLASS_D' | 'CLASS_E';
+  name: string;
+  desc?: string;
+  mainStat: 'strength' | 'agility' | 'intelligence' | 'constitution' | 'luck';
+  mainStatName: string;
+  hpMultiplier: number;
+  blockChanceBp: number;
+  dodgeChanceBp: number;
+  allowedWeaponClasses: ('blade' | 'sword' | 'spear' | 'blunt' | 'bow' | 'fist')[];
+  weaponFactor?: number;
+  armorCap?: number;
+}
+
 // 最终战斗衍生实体类型
 export interface WeaponFinal {
   id: string;
@@ -209,6 +223,74 @@ export const honorTitles: HonorTitleTier[] = equipmentData.honor_titles || [
   { minHonor: 2800, maxHonor: 999999, title: '盖世英雄' },
 ];
 
+export const classConfigs: ClassConfigItem[] = equipmentData.classes || [
+  {
+    id: 'CLASS_A',
+    name: '猛将',
+    desc: '猛力破阵型：精通大刀与长枪，体魄成长极高，拥有卓越的正面架招格挡能力。',
+    mainStat: 'strength',
+    mainStatName: '力量',
+    hpMultiplier: 5,
+    blockChanceBp: 2500,
+    dodgeChanceBp: 0,
+    allowedWeaponClasses: ['blade', 'spear'],
+    weaponFactor: 2.0,
+    armorCap: 50,
+  },
+  {
+    id: 'CLASS_B',
+    name: '游侠',
+    desc: '灵动身法型：精通佩剑，拥有极高的被动闪避，身法飘逸难测。',
+    mainStat: 'agility',
+    mainStatName: '身法敏捷',
+    hpMultiplier: 4,
+    blockChanceBp: 0,
+    dodgeChanceBp: 5000,
+    allowedWeaponClasses: ['sword'],
+    weaponFactor: 2.5,
+    armorCap: 25,
+  },
+  {
+    id: 'CLASS_C',
+    name: '军策',
+    desc: '谋略权谋型：配精钢文剑，身板最脆但智力极高，未来规划掌控计策与弱点破绽。',
+    mainStat: 'intelligence',
+    mainStatName: '智谋',
+    hpMultiplier: 2,
+    blockChanceBp: 0,
+    dodgeChanceBp: 0,
+    allowedWeaponClasses: ['sword'],
+    weaponFactor: 4.5,
+    armorCap: 10,
+  },
+  {
+    id: 'CLASS_D',
+    name: '义士',
+    desc: '敏捷刺袭型：偏好轻快单手刀，身法敏锐，未来规划暗器刺击与追击连斩。',
+    mainStat: 'agility',
+    mainStatName: '身法敏捷',
+    hpMultiplier: 4,
+    blockChanceBp: 0,
+    dodgeChanceBp: 0,
+    allowedWeaponClasses: ['blade'],
+    weaponFactor: 2.0,
+    armorCap: 25,
+  },
+  {
+    id: 'CLASS_E',
+    name: '绿林好汉',
+    desc: '重装强攻型：崇尚骨朵重锤与四棱铁锏，未破甲亦能凭借钝击震荡重创敌人。',
+    mainStat: 'strength',
+    mainStatName: '神力',
+    hpMultiplier: 4,
+    blockChanceBp: 0,
+    dodgeChanceBp: 0,
+    allowedWeaponClasses: ['blunt'],
+    weaponFactor: 2.0,
+    armorCap: 25,
+  },
+];
+
 /** 根据霸气数值动态计算段位称号 */
 export function getHonorTitle(honor: number): string {
   const safeHonor = Math.max(0, Math.floor(honor || 0));
@@ -268,6 +350,10 @@ export function reloadEquipmentData(newData?: any): void {
   if (Array.isArray(data.honor_titles)) {
     honorTitles.length = 0;
     honorTitles.push(...data.honor_titles);
+  }
+  if (Array.isArray(data.classes)) {
+    classConfigs.length = 0;
+    classConfigs.push(...data.classes);
   }
 }
 
