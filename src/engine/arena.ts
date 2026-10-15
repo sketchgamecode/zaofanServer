@@ -10,7 +10,7 @@ import { GameError } from './errors.js';
 import { MathCore } from './mathCore.js';
 import { grantExp, grantResource, spendResource } from './resourceService.js';
 import { insertBattleReplay } from '../lib/battleReplayStore.js';
-import { getWeaponFinal, getArmorFinal, getShieldFinal, shields, getHonorTitle, enrichEquipmentItem } from '../lib/equipmentData.js';
+import { getWeaponFinal, getArmorFinal, getShieldFinal, shields, getHonorTitle, getNextHonorTitleInfo, enrichEquipmentItem } from '../lib/equipmentData.js';
 
 import { generateEquipment } from './equipmentGenerator.js';
 
@@ -257,6 +257,8 @@ export function arenaGetInfo(ctx: ActionContext, _payload: Record<string, unknow
     honor: number;
     rank: number | null;
     title: string;
+    nextTitle: string;
+    nextHonorThreshold: number;
     dailyXpWins: number;
     maxDailyXpWins: number;
     cooldownRemainingMs: number;
@@ -266,6 +268,7 @@ export function arenaGetInfo(ctx: ActionContext, _payload: Record<string, unknow
   if (!ctx.state.arena.candidates?.length) refreshCandidates(ctx.state, ctx.now);
   ctx.markDirty();
   const honor = ctx.state.arena.honor ?? 1000;
+  const nextInfo = getNextHonorTitleInfo(honor);
   return {
     ok: true,
     action: 'ARENA_GET_INFO',
@@ -277,6 +280,8 @@ export function arenaGetInfo(ctx: ActionContext, _payload: Record<string, unknow
         honor,
         rank: ctx.state.arena.rank ?? null,
         title: getHonorTitle(honor),
+        nextTitle: nextInfo.nextTitle,
+        nextHonorThreshold: nextInfo.nextHonorThreshold,
         dailyXpWins: ctx.state.arena.dailyXpWins ?? 0,
         maxDailyXpWins: ctx.state.arena.maxDailyXpWins ?? 10,
         cooldownRemainingMs: Math.max(0, (ctx.state.arena.cooldownEndTime ?? 0) - ctx.now),

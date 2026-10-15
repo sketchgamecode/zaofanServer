@@ -234,7 +234,9 @@ export type CharacterInfoView = {
   player: {
     level: number;
     exp: number;
+    maxExp?: number;
     classId: PlayerClassId;
+    className?: string;
     raceId: RaceId;
     displayName?: string;
     avatarId?: string;

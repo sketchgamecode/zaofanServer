@@ -1,4 +1,6 @@
 import { ATTRIBUTE_KEYS, getAttributeUpgradeCost } from '../config/characterRules.js';
+import { XP_TABLE } from '../data/xpTable.js';
+import { CLASS_CONFIG } from './combatConfig.js';
 import type { ActionSuccessResponse } from '../types/action.js';
 import type { ActionContext } from './actionContext.js';
 import { buildCombatPreview, buildCharacterCombatSummary } from './characterCombat.js';
@@ -23,7 +25,9 @@ export function buildCharacterInfoView(state: ActionContext['state']): Character
     player: {
       level: state.player.level,
       exp: state.player.exp,
+      maxExp: XP_TABLE[state.player.level] ?? 0,
       classId: state.player.classId,
+      className: CLASS_CONFIG[state.player.classId]?.name ?? state.player.classId,
       raceId: state.player.raceId,
       displayName: state.player.displayName,
       avatarId: state.player.avatarId,

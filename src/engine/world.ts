@@ -6,6 +6,7 @@ import { GameError } from './errors.js';
 import { getGameDateString } from '../lib/time.js';
 import { buildCharacterInfoView } from './character.js';
 import { CLASS_CONFIG } from './combatConfig.js';
+import { XP_TABLE } from '../data/xpTable.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
 import { serverSimulateBattle } from './mathCore.js';
 
@@ -1075,7 +1076,9 @@ function buildCharacterInfoViewFromActor(actor: WorldActor): CharacterInfoView {
     player: {
       level: actor.level,
       exp: 0,
+      maxExp: XP_TABLE[actor.level] ?? 0,
       classId: actor.classId,
+      className: CLASS_CONFIG[actor.classId]?.name ?? actor.classId,
       raceId: actor.raceId,
       displayName: actor.displayName,
       avatarId: undefined,

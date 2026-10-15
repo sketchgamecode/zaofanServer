@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getHonorTitle } from '../lib/equipmentData.js';
+import { getHonorTitle, getNextHonorTitleInfo } from '../lib/equipmentData.js';
 import { buildBotCandidate } from './arena.js';
 
 describe('Honor Titles System', () => {
@@ -57,5 +57,22 @@ describe('Honor Titles System', () => {
     expect(bot.honor).toBeGreaterThanOrEqual(0);
     expect(bot.title).toBeDefined();
     expect(bot.title).toBe(getHonorTitle(bot.honor ?? 0));
+  });
+
+  it('getNextHonorTitleInfo correctly returns next title and minimum honor threshold', () => {
+    // 0~499: current 日龙包, next 路人 (500)
+    const next0 = getNextHonorTitleInfo(0);
+    expect(next0.nextTitle).toBe('路人');
+    expect(next0.nextHonorThreshold).toBe(500);
+
+    // 1000: current 操哥 (900~1199), next 猛人 (1200)
+    const next1000 = getNextHonorTitleInfo(1000);
+    expect(next1000.nextTitle).toBe('猛人');
+    expect(next1000.nextHonorThreshold).toBe(1200);
+
+    // 2800: current 盖世英雄 (max tier)
+    const nextMax = getNextHonorTitleInfo(3000);
+    expect(nextMax.nextTitle).toBe('盖世英雄');
+    expect(nextMax.nextHonorThreshold).toBe(2800);
   });
 });

@@ -306,6 +306,28 @@ export function getHonorTitle(honor: number): string {
   return '路人';
 }
 
+/** 根据霸气数值动态计算下一段位称号及所需门槛 */
+export function getNextHonorTitleInfo(honor: number): { nextTitle: string; nextHonorThreshold: number } {
+  const safeHonor = Math.max(0, Math.floor(honor || 0));
+  const sorted = [...honorTitles].sort((a, b) => a.minHonor - b.minHonor);
+  const matchedIndex = sorted.findIndex((t) => safeHonor >= t.minHonor && safeHonor <= t.maxHonor);
+  if (matchedIndex !== -1 && matchedIndex < sorted.length - 1) {
+    const nextTier = sorted[matchedIndex + 1];
+    return {
+      nextTitle: nextTier.title,
+      nextHonorThreshold: nextTier.minHonor,
+    };
+  }
+  if (sorted.length > 0) {
+    const lastTier = sorted[sorted.length - 1];
+    return {
+      nextTitle: lastTier.title,
+      nextHonorThreshold: lastTier.minHonor,
+    };
+  }
+  return { nextTitle: '最高段位', nextHonorThreshold: 999999 };
+}
+
 // ---------- 热重载与持久化 ----------
 
 export function reloadEquipmentData(newData?: any): void {
