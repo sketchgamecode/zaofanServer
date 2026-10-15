@@ -1,6 +1,6 @@
 import { createSeededRandom } from '../lib/rng.js';
 import type { ActionSuccessResponse } from '../types/action.js';
-import type { ArenaOpponentPreview, CombatantSnapshot, GameState, PlayerClassId } from '../types/gameState.js';
+import type { ArenaOpponentPreview, CombatantSnapshot, GameState, PlayerClassId, EquipmentItem } from '../types/gameState.js';
 import type { ActionContext } from './actionContext.js';
 import { buildBattleReplayRecord } from './battleReplayRecords.js';
 import { buildPlayerCombatSnapshot } from './characterCombat.js';
@@ -127,23 +127,8 @@ export function buildBotCandidate(
     rng,
   });
 
-  let offHandItem = null;
-  if (classId === 'CLASS_D') {
-    offHandItem = generateEquipment({
-      playerLevel: level,
-      slot: 'offHand',
-      classId: 'CLASS_D',
-      forcedItemId: 'dao_liuye',
-      rng,
-    });
-  } else if (index === 2 || rng.next() < 0.5) {
-    offHandItem = generateEquipment({
-      playerLevel: level,
-      slot: 'offHand',
-      forcedItemId: rng.pick(['tengpai', 'pangpai']),
-      rng,
-    });
-  }
+  // 方案A：前期候选人统一只装备主手兵器与甲胄，暂不开放副手
+  const offHandItem: EquipmentItem | null = null;
 
   const loadout = {
     weapon: weaponItem,
@@ -162,18 +147,8 @@ export function buildBotCandidate(
   );
   const finalA = getArmorFinal(bodyItem.itemId || bodyItem.id, bodyItem.upgrade);
 
-  let blockBp = CLASS_CONFIG[classId].blockChanceBp ?? 0;
-  let dodgeBp = finalA.dodge * 100 + (CLASS_CONFIG[classId].dodgeChanceBp ?? 0);
-  if (offHandItem) {
-    const isShield = shields.some((s) => s.id === offHandItem.itemId);
-    if (isShield) {
-      const finalS = getShieldFinal(offHandItem.itemId!);
-      blockBp += Math.round(finalS.blockMod * 10000);
-      dodgeBp += Math.round(finalS.dodgeMod * 100);
-    } else {
-      blockBp = 0;
-    }
-  }
+  const blockBp = CLASS_CONFIG[classId].blockChanceBp ?? 0;
+  const dodgeBp = finalA.dodge * 100 + (CLASS_CONFIG[classId].dodgeChanceBp ?? 0);
 
   const hp = MathCore.getMaxHP(attributes.constitution, level, classId);
   const armorValue = finalA.reduce;

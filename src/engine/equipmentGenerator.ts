@@ -79,7 +79,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
   const rng = input.rng ?? defaultRng();
   const level = input.playerLevel;
   
-  let slot = input.slot ?? rng.pick(['weapon', 'offHand', 'body'] as EquipmentSlot[]);
+  let slot = input.slot ?? rng.pick(['weapon', 'body'] as EquipmentSlot[]);
   if (input.forcedItemId) {
     const isW = baseWeapons.some((w) => w.id === input.forcedItemId);
     const isA = armors.some((a) => a.id === input.forcedItemId);
@@ -353,9 +353,9 @@ export function generateMagicShopItems(input: ShopBatchInput): EquipmentItem[] {
 
   const items: EquipmentItem[] = [];
 
-  // 生成副手盾牌/双持武器 以及 甲防衣物
+  // 方案A：前期仅生成主手兵器与甲防衣物，暂不开放副手
   for (let i = 0; i < count; i++) {
-    const slot = (rng ?? defaultRng()).pick(['offHand', 'body'] as EquipmentSlot[]);
+    const slot = (rng ?? defaultRng()).pick(['weapon', 'body'] as EquipmentSlot[]);
     items.push(generateEquipment({ playerLevel, classId, slot, rng }));
   }
 

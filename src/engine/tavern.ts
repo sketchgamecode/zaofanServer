@@ -368,7 +368,7 @@ function buildVisibleReward(level: number, durationMin: number, slotIndex: numbe
     hasEquipment,
     equipmentPreview: hasEquipment
       ? {
-          slot: rng.pick(['weapon', 'offHand', 'body'] as const),
+          slot: rng.pick(['weapon', 'body'] as const),
           rarity: rng.int(0, 2) as 0 | 1 | 2,
         }
       : undefined,
