@@ -58,6 +58,8 @@ export type EquipmentItem = {
   iconId?: string;
   subType?: 'weapon' | 'shield' | 'none';
   armor?: number;
+  hasArmorLevel?: boolean;
+  armorLevel?: number;
   weaponDamage?: { min: number; max: number };
   price?: number;
   sellPrice: number;
@@ -901,6 +903,13 @@ export type ArenaOpponentPreview = {
     dodgeChanceBp?: number;
   };
   loadout?: CombatLoadout;
+  equipment?: {
+    equipped: {
+      weapon: EquipmentItem | null;
+      offHand: EquipmentItem | null;
+      body: EquipmentItem | null;
+    };
+  };
 };
 
 export type BattleReplayRecord = {

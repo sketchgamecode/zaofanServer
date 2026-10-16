@@ -28,7 +28,7 @@ const ARCHETYPE_CONFIGS = [
     // Candidate 0: 重装锤枪/高力量型
     classIds: ['CLASS_A', 'CLASS_E'] as PlayerClassId[],
     forcedWeapons: ['chui_guduo', 'qiang_daqiang', 'dao_changdao'],
-    forcedArmors: ['zhajia', 'mingguang', 'liangdang'],
+    forcedArmors: ['zhajia', 'mingguang', 'liangdang', 'burenjia', 'shanwen'],
     statDist: (base: number) => ({
       strength: Math.floor(base * 1.4),
       constitution: Math.floor(base * 1.1),
@@ -41,7 +41,7 @@ const ARCHETYPE_CONFIGS = [
     // Candidate 1: 疾风轻甲/双持敏捷型
     classIds: ['CLASS_B', 'CLASS_D'] as PlayerClassId[],
     forcedWeapons: ['dao_liuye', 'dao_yanling', 'jian_danshou'],
-    forcedArmors: ['pijia', 'zhijia', 'tengjia'],
+    forcedArmors: ['buyi', 'pijia', 'zhijia', 'tengjia'],
     statDist: (base: number) => ({
       agility: Math.floor(base * 1.45),
       luck: Math.floor(base * 0.9),
@@ -54,7 +54,7 @@ const ARCHETYPE_CONFIGS = [
     // Candidate 2: 智计持盾/高防佩剑型
     classIds: ['CLASS_C', 'CLASS_A'] as PlayerClassId[],
     forcedWeapons: ['jian_danshou', 'dao_huanshou'],
-    forcedArmors: ['zhijia', 'mianjia', 'mingguang'],
+    forcedArmors: ['zhijia', 'mianjia', 'mingguang', 'burenjia', 'suozi'],
     statDist: (base: number) => ({
       intelligence: Math.floor(base * 1.4),
       constitution: Math.floor(base * 1.0),
@@ -76,7 +76,23 @@ function ensureArenaActive(state: GameState): void {
   state.arena.candidates ??= [];
   if (state.arena.candidates.length) {
     for (const c of state.arena.candidates) {
-      if (c.loadout) c.loadout.offHand = null;
+      if (c.loadout) {
+        c.loadout.offHand = null;
+        if (c.loadout.weapon) enrichEquipmentItem(c.loadout.weapon);
+        if (c.loadout.body) enrichEquipmentItem(c.loadout.body);
+      }
+      if (!c.equipment && c.loadout) {
+        c.equipment = {
+          equipped: {
+            weapon: c.loadout.weapon,
+            offHand: c.loadout.offHand,
+            body: c.loadout.body,
+          },
+        };
+      } else if (c.equipment?.equipped) {
+        if (c.equipment.equipped.weapon) enrichEquipmentItem(c.equipment.equipped.weapon);
+        if (c.equipment.equipped.body) enrichEquipmentItem(c.equipment.equipped.body);
+      }
     }
   }
   state.arena.candidateSetId ??= null;
@@ -135,10 +151,18 @@ export function buildBotCandidate(
   const offHandItem: EquipmentItem | null = null;
 
   const loadout = {
-    weapon: weaponItem,
+    weapon: enrichEquipmentItem(weaponItem),
     offHand: offHandItem,
-    body: bodyItem,
+    body: enrichEquipmentItem(bodyItem),
     arrow: weaponItem.arrow ?? 'normal',
+  };
+
+  const equipment = {
+    equipped: {
+      weapon: loadout.weapon,
+      offHand: loadout.offHand,
+      body: loadout.body,
+    },
   };
 
   // 6. 战斗快照数值 (Combat Preview)
@@ -181,6 +205,7 @@ export function buildBotCandidate(
       dodgeChanceBp: Math.max(0, dodgeBp),
     },
     loadout,
+    equipment,
   };
 }
 

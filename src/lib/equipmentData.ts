@@ -1100,10 +1100,24 @@ export function enrichEquipmentItem<
     item.combatProfile = buildWeaponCombatProfile(item as any);
   }
 
+  // 若为防具槽位或防具物品，注入/更新权威防护等级 A (armorLevel) 与 hasArmorLevel
+  const isArmor = item.slot === 'body' || armors.some((a) => a.id === item.itemId || a.id === item.id);
+  if (isArmor) {
+    const armorId = item.itemId || item.id;
+    if (armorId) {
+      const finalA = getArmorFinal(armorId, (item as any).upgrade);
+      (item as any).hasArmorLevel = true;
+      (item as any).armorLevel = finalA.a;
+      if ((item as any).armor === undefined) {
+        (item as any).armor = finalA.reduce;
+      }
+    }
+  }
+
   return item;
 }
 
-/** 遍历并为整个 GameState 的装备栏、背包及黑市物品同步最新 iconId 与汉字名称与画像 */
+/** 遍历并为整个 GameState 的装备栏、背包、黑市以及竞技场候选人同步最新 iconId 与汉字名称与画像 */
 export function normalizeGameStateEquipment(state: GameState): GameState {
   if (state.equipment?.equipped) {
     if (state.equipment.equipped.weapon) enrichEquipmentItem(state.equipment.equipped.weapon);
@@ -1115,6 +1129,20 @@ export function normalizeGameStateEquipment(state: GameState): GameState {
   }
   if (state.blackMarket?.items) {
     state.blackMarket.items.forEach((item) => enrichEquipmentItem(item));
+  }
+  if (state.arena?.candidates) {
+    for (const c of state.arena.candidates) {
+      if (c.loadout) {
+        if (c.loadout.weapon) enrichEquipmentItem(c.loadout.weapon);
+        if (c.loadout.offHand) enrichEquipmentItem(c.loadout.offHand);
+        if (c.loadout.body) enrichEquipmentItem(c.loadout.body);
+      }
+      if (c.equipment?.equipped) {
+        if (c.equipment.equipped.weapon) enrichEquipmentItem(c.equipment.equipped.weapon);
+        if (c.equipment.equipped.offHand) enrichEquipmentItem(c.equipment.equipped.offHand);
+        if (c.equipment.equipped.body) enrichEquipmentItem(c.equipment.equipped.body);
+      }
+    }
   }
   return state;
 }

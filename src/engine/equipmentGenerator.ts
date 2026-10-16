@@ -14,6 +14,7 @@ import {
   getArmorFinal,
   getShieldFinal,
   buildWeaponCombatProfile,
+  enrichEquipmentItem,
 } from '../lib/equipmentData.js';
 
 import { CLASS_CONFIG } from './combatConfig.js';
@@ -109,6 +110,8 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
   let desc = '';
   let subType: 'weapon' | 'shield' | 'none' = 'none';
   let armorVal: number | undefined;
+  let hasArmorLevel: boolean | undefined;
+  let armorLevel: number | undefined;
   let weaponDamageVal: { min: number; max: number } | undefined;
 
   // 2. 名器特殊处理 (Rarity 4)
@@ -147,6 +150,8 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
       
       const finalA = getArmorFinal(itemId, upgrade);
       armorVal = finalA.reduce;
+      hasArmorLevel = true;
+      armorLevel = finalA.a;
     } else {
       itemId = 'tengpai';
       name = '百炼铁缘藤牌';
@@ -221,6 +226,8 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
 
       const finalA = getArmorFinal(itemId, upgrade);
       armorVal = finalA.reduce;
+      hasArmorLevel = true;
+      armorLevel = finalA.a;
 
       name = composeItemName({ slot: 'body', itemId, upgrade });
       desc = `防具：${name}。防护级: A${finalA.a}，护甲减伤: ${finalA.reduce}，体力上限修正: ${finalA.stamina}。`;
@@ -295,7 +302,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
         })
       : undefined;
 
-    return {
+    return enrichEquipmentItem({
       id,
       name,
       description: desc,
@@ -304,6 +311,8 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
       iconId: customIconId,
       subType,
       armor: armorVal,
+      hasArmorLevel,
+      armorLevel,
       weaponDamage: weaponDamageVal,
       price,
       sellPrice,
@@ -315,7 +324,7 @@ export function generateEquipment(input: GenerateEquipmentInput): EquipmentItem 
       upgrade,
       arrow,
       combatProfile,
-    };
+    });
   }
 
 export type ShopBatchInput = {
